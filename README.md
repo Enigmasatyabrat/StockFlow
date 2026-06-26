@@ -8,20 +8,19 @@ Instead of manually writing titles, descriptions, and keywords for every image, 
 
 ---
 
-## Features
 
-* AI-generated stock photo titles
-* AI-generated descriptions
-* SEO-oriented keyword generation
-* EXIF/IPTC/XMP metadata embedding
-* Shutterstock CSV export
-* Adobe Stock compatible metadata
-* Automatic PNG → JPEG conversion
-* Automatic oversized image preparation
-* Resolution validation
-* Retry handling for temporary API failures
-* Detection of potential model/property release requirements
-* Batch processing
+## What StockFlow Does
+
+- 🤖 Generate commercial stock metadata
+- 📝 Create SEO-oriented titles, descriptions, and keywords
+- 🏷️ Embed EXIF, IPTC, and XMP metadata
+- 🖼️ Prepare upload-ready images automatically
+- 📄 Generate Shutterstock-compatible CSV files
+- 📂 Batch process entire photo folders
+- ⚠️ Detect potential model and property release requirements
+- 📏 Validate image resolution and supported formats
+- 🔄 Retry temporary API failures automatically
+- 📊 Produce quality scores and review logs
 
 ---
 
@@ -137,6 +136,9 @@ Apache License 2.0.
 
 Satyabrat Mishra
 
+---
+
 ## Disclaimer
 
 StockFlow assists with metadata generation and workflow automation. Contributors remain responsible for verifying metadata accuracy and complying with the submission requirements of each stock marketplace, including model releases, property releases, and intellectual property restrictions.
+
