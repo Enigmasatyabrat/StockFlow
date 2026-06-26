@@ -1,7 +1,7 @@
 """
 StockFlow
 
-AI-powered workflow for preparing stock photography for stock marketplaces.
+AI-powered workflow for preparing stock photography for Shutterstock, Adobe Stock and other stock marketplaces.
 
 Features:
 - AI metadata generation
