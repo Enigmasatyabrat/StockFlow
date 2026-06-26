@@ -1,15 +1,30 @@
 """
 ========================================================
-  STOCK METADATA PIPELINE  —  v2 (fixed + sell-optimized)
+  STOCK METADATA PIPELINE  —  v3 (fixed + sell-optimized + auto-prep)
   Free. Local. No subscriptions.
 ========================================================
 
 WHAT THIS DOES:
   Looks at each photo with AI, writes a SALES-OPTIMIZED title +
   description + keywords INSIDE the file, skips weak/blurry/too-small
-  shots, flags photos that need a model/property release, and makes
-  a CSV so Shutterstock auto-fills on upload. Adobe Stock also reads
-  the embedded metadata automatically.
+  shots, flags photos that need a model/property release, AUTOMATICALLY
+  fixes file-format/size problems so the output is upload-ready, and
+  makes a CSV so Shutterstock auto-fills on upload. Adobe Stock also
+  reads the embedded metadata automatically.
+
+  After this runs, the only manual step left is dragging the folder
+  into Shutterstock / Adobe Stock / wherever else you're submitting.
+
+WHAT'S NEW IN v3 (on top of the v2 fixes):
+  - Auto file-prep ("the image resizer"): any PNG gets converted to a
+    JPEG copy (Shutterstock requires JPEG/TIFF, not PNG), and any file
+    over Shutterstock's 50MB limit gets automatically re-compressed/
+    resized down until it fits — instead of just warning you about it
+    and leaving you to fix it by hand. Your original files are never
+    touched; a "_ready.jpg" copy is created next to them when needed.
+  - A double-click launcher (run_pipeline.bat) so you never have to
+    open PowerShell and type a command — just drag your photo folder
+    onto the .bat file (see the bottom of this docstring).
 
 WHAT'S NEW IN v2 (vs. the original script):
   - Fixed: the model name ("gemini-2.0-flash") was retired by Google
@@ -71,13 +86,21 @@ free Flash model name to swap in.
   HOW TO RUN IT
 ========================================================
 
-  python stock_pipeline_v2.py "D:\\Photos\\batch_01"
+  EASIEST WAY:
+  Double-click "run_pipeline.bat" (next to this script) and either
+  drag your photo folder onto its icon, or just double-click it and
+  paste the folder path when it asks. No PowerShell, no typing python
+  commands.
+
+  MANUAL WAY:
+  python stock_pipeline_v3.py "D:\\Photos\\batch_01"
 
   Replace the path with your actual folder of photos.
   It will create two files inside that folder:
     - shutterstock_upload.csv   (import this on Shutterstock)
-    - needs_review.txt          (skips, errors, AND release/rejection
-                                  warnings worth reading before upload)
+    - needs_review.txt          (skips, errors, AND release/rejection/
+                                  auto-prep notes worth reading before
+                                  upload)
 
   Safe to stop and restart anytime. A photo that errors out gets
   retried automatically on the next run (up to 3 attempts total)
@@ -115,7 +138,7 @@ from pathlib import Path
 
 from google import genai
 from google.genai import types
-from PIL import Image
+from PIL import Image, ImageFilter
 import io
 
 # ──────────────────────────── SETTINGS ────────────────────────────────────
@@ -126,7 +149,7 @@ PAUSE_SECONDS    = 4      # pause between API calls (free tier ~15 requests/min)
 MIN_SCORE        = 60     # skip photos the AI scores below this (0-100)
 MAX_PIXELS       = 1024   # resize before sending to API (doesn't touch original)
 MIN_MEGAPIXELS   = 4.0    # Shutterstock's minimum — skip smaller photos, no API call spent
-MAX_FILE_SIZE_MB = 50     # Shutterstock's max upload size — just a warning, not a block
+MAX_FILE_SIZE_MB = 50     # Shutterstock's max upload size — oversize files get auto-shrunk
 MAX_ATTEMPTS     = 3      # retry a failing photo this many separate RUNS before giving up
 IMAGE_TYPES      = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
@@ -267,12 +290,20 @@ def save_registry(folder: Path, reg: dict):
     p.write_text(json.dumps(reg, indent=2))
 
 
+def mark_registry(folder: Path, registry: dict, names: set, status: str, **extra):
+    """Marks one or more filenames (e.g. an original PNG and its
+    auto-converted _ready.jpg) with the same status in one go."""
+    for n in names:
+        registry[n] = {"status": status, **extra}
+    save_registry(folder, registry)
+
+
 def is_pending(name: str, registry: dict) -> bool:
     entry = registry.get(name)
     if entry is None:
         return True
     status = entry.get("status")
-    if status in ("done", "skipped", "skipped_lowres", "error_permanent"):
+    if status in ("done", "skipped", "skipped_lowres", "error_permanent", "converted"):
         return False
     if status == "error":
         return entry.get("attempts", 0) < MAX_ATTEMPTS
@@ -294,6 +325,47 @@ def resize_for_api(path: Path) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     return buf.getvalue()
+
+
+def normalize_image(path: Path) -> Path:
+    """
+    Makes sure the file is actually upload-ready before we spend an API
+    call on it: converts PNG -> JPEG (Shutterstock wants JPEG/TIFF, not
+    PNG) and shrinks anything over MAX_FILE_SIZE_MB. Never touches the
+    original — writes a "<name>_ready.jpg" copy alongside it when a
+    change is needed, and returns that path. Returns the original path
+    unchanged if no fix is needed.
+    """
+    size_mb = path.stat().st_size / (1024 * 1024)
+    needs_convert = path.suffix.lower() == ".png"
+    needs_shrink = size_mb > MAX_FILE_SIZE_MB
+    if not needs_convert and not needs_shrink:
+        return path
+
+    img = Image.open(path).convert("RGB")
+    out_path = path.with_name(path.stem + "_ready.jpg")
+
+    quality = 92
+    img.save(out_path, format="JPEG", quality=quality)
+
+    # still too big? step quality down first to preserve resolution
+    while out_path.stat().st_size / (1024 * 1024) > MAX_FILE_SIZE_MB and quality > 60:
+        quality -= 10
+        img.save(out_path, format="JPEG", quality=quality)
+
+    # still too big even at low quality (huge TIFF/scan)? scale dimensions down too.
+    # LANCZOS resampling is the same high-quality filter pro tools use, but any
+    # resize softens fine detail slightly — a light unsharp pass afterward
+    # recovers the perceived sharpness reviewers look for.
+    scale = 1.0
+    while out_path.stat().st_size / (1024 * 1024) > MAX_FILE_SIZE_MB and scale > 0.5:
+        scale -= 0.1
+        w, h = img.size
+        resized = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+        resized = resized.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=2))
+        resized.save(out_path, format="JPEG", quality=75)
+
+    return out_path
 
 
 def extract_json_text(text: str) -> str:
@@ -432,29 +504,27 @@ def main():
 
     for i, path in enumerate(batch, 1):
         print(f"[{i}/{len(batch)}] {path.name}", end=" ... ", flush=True)
-
-        # ── pre-flight notes that don't block processing ──
-        size_mb = path.stat().st_size / (1024 * 1024)
-        if size_mb > MAX_FILE_SIZE_MB:
-            log(review_log, f"NOTE  {path.name}  file is {size_mb:.0f}MB, "
-                             f"Shutterstock's max is {MAX_FILE_SIZE_MB}MB — compress before upload")
-        if path.suffix.lower() == ".png":
-            log(review_log, f"NOTE  {path.name}  PNG — Shutterstock photo uploads need JPEG/TIFF "
-                             f"(Adobe Stock accepts PNG)")
+        names = {path.name}
 
         try:
+            # ── auto file-prep: fix PNG/oversize issues before anything else ──
+            work_path = normalize_image(path)
+            if work_path != path:
+                names.add(work_path.name)
+                print(f"(prepared as {work_path.name}) ", end="", flush=True)
+                log(review_log, f"NOTE  {path.name}  auto-prepared for upload -> {work_path.name}")
+
             # ── resolution pre-check — skip BEFORE spending an API call ──
-            with Image.open(path) as probe:
+            with Image.open(work_path) as probe:
                 mp = (probe.size[0] * probe.size[1]) / 1_000_000
             if mp < MIN_MEGAPIXELS:
                 print(f"SKIPPED (too small: {mp:.1f}MP, need {MIN_MEGAPIXELS}MP+)")
                 log(review_log, f"SKIPPED  {path.name}  resolution={mp:.1f}MP (need {MIN_MEGAPIXELS}MP+)")
-                registry[path.name] = {"status": "skipped_lowres", "attempts": 0}
-                save_registry(folder, registry)
+                mark_registry(folder, registry, names, "skipped_lowres", attempts=0)
                 skipped += 1
                 continue
 
-            img_bytes = resize_for_api(path)
+            img_bytes = resize_for_api(work_path)
             data      = call_gemini(client, img_bytes)
 
             score = int(data.get("commercial_score", 0))
@@ -467,8 +537,7 @@ def main():
             if score < MIN_SCORE:
                 print(f"SKIPPED (score {score}/100, risk: {risk})")
                 log(review_log, f"SKIPPED  {path.name}  score={score}  risk={risk}")
-                registry[path.name] = {"status": "skipped", "attempts": 0}
-                save_registry(folder, registry)
+                mark_registry(folder, registry, names, "skipped", attempts=0)
                 skipped += 1
                 time.sleep(PAUSE_SECONDS)
                 continue
@@ -485,11 +554,10 @@ def main():
             if category2 and (category2 not in SHUTTERSTOCK_CATEGORIES or category2 == category):
                 category2 = ""
 
-            embed_metadata(path, title, description, keywords)
-            write_csv_row(csv_path, path.name, title, keywords, category, category2)
+            embed_metadata(work_path, title, description, keywords)
+            write_csv_row(csv_path, work_path.name, title, keywords, category, category2)
 
-            registry[path.name] = {"status": "done", "attempts": 0}
-            save_registry(folder, registry)
+            mark_registry(folder, registry, names, "done", attempts=0)
             uploaded += 1
 
             flags = []
@@ -509,8 +577,7 @@ def main():
             status = "error" if attempts < MAX_ATTEMPTS else "error_permanent"
             print(f"ERROR (attempt {attempts}/{MAX_ATTEMPTS}) — {e}")
             log(review_log, f"ERROR  {path.name}  attempt={attempts}  {e}")
-            registry[path.name] = {"status": status, "attempts": attempts, "last_error": str(e)[:300]}
-            save_registry(folder, registry)
+            mark_registry(folder, registry, names, status, attempts=attempts, last_error=str(e)[:300])
 
         time.sleep(PAUSE_SECONDS)
 
