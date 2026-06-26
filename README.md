@@ -136,3 +136,7 @@ Apache License 2.0.
 ## Author
 
 Satyabrat Mishra
+
+## Disclaimer
+
+StockFlow assists with metadata generation and workflow automation. Contributors remain responsible for verifying metadata accuracy and complying with the submission requirements of each stock marketplace, including model releases, property releases, and intellectual property restrictions.
