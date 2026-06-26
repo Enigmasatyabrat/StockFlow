@@ -1,50 +1,85 @@
+
 """
-StockFlow
+StockFlow v4
+=============
+AI-powered workflow for preparing stock photography for Shutterstock,
+Adobe Stock, and other stock marketplaces.
 
-AI-powered workflow for preparing stock photography for Shutterstock, Adobe Stock and other stock marketplaces.
-
-Features:
-- AI metadata generation
-- EXIF/IPTC/XMP embedding
-- Shutterstock CSV export
-- Image preparation
-- Batch processing
+v4 focus:
+- automatic folder organization
+- smart rename of best assets
+- low-res / low-quality / release-needed / duplicate separation
+- ready-to-upload folder for the best images only
+- report generation
 
 Author: Satyabrat Mishra
 License: Apache-2.0
-
-See README.md for installation and usage.
 """
 
+from __future__ import annotations
+
 import csv
+import hashlib
+import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any, Dict, Iterable, List, Tuple
 
 from google import genai
 from google.genai import types
 from PIL import Image, ImageFilter
-import io
 
 # ──────────────────────────── SETTINGS ────────────────────────────────────
 SCRIPT_DIR       = Path(__file__).resolve().parent
-MODEL            = "gemini-2.5-flash"   # free tier as of mid-2026 — see NOTE above
-BATCH_LIMIT      = 50     # photos per run (start small, raise later)
-PAUSE_SECONDS    = 4      # pause between API calls (free tier ~15 requests/min)
-MIN_SCORE        = 60     # skip photos the AI scores below this (0-100)
-MAX_PIXELS       = 1024   # resize before sending to API (doesn't touch original)
-MIN_MEGAPIXELS   = 4.0    # Shutterstock's minimum — skip smaller photos, no API call spent
-MAX_FILE_SIZE_MB = 50     # Shutterstock's max upload size — oversize files get auto-shrunk
-MAX_ATTEMPTS     = 3      # retry a failing photo this many separate RUNS before giving up
+MODEL            = "gemini-2.5-flash"
+BATCH_LIMIT      = 50
+PAUSE_SECONDS    = 4
+MIN_SCORE        = 60
+MAX_PIXELS       = 1024
+MIN_MEGAPIXELS   = 4.0
+MAX_FILE_SIZE_MB = 50
+MAX_ATTEMPTS     = 3
 IMAGE_TYPES      = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
+# Output folders
+FOLDER_SOURCE_ORIGINALS = "00_SOURCE_ORIGINALS"
+FOLDER_READY            = "01_READY_UPLOAD"
+FOLDER_LOWRES           = "02_SKIPPED_LOWRES"
+FOLDER_LOWQUALITY       = "03_SKIPPED_LOWQUALITY"
+FOLDER_DUPLICATES       = "04_DUPLICATES"
+FOLDER_NEEDS_RELEASE    = "05_NEEDS_RELEASE"
+FOLDER_REVIEW           = "06_REVIEW"
+FOLDER_REPORTS          = "Reports"
+
+DESTINATION_FOLDERS = [
+    FOLDER_SOURCE_ORIGINALS,
+    FOLDER_READY,
+    FOLDER_LOWRES,
+    FOLDER_LOWQUALITY,
+    FOLDER_DUPLICATES,
+    FOLDER_NEEDS_RELEASE,
+    FOLDER_REVIEW,
+    FOLDER_REPORTS,
+]
+
+STATUS_READY = "READY"
+STATUS_LOWRES = "LOW_RESOLUTION"
+STATUS_LOWQUALITY = "LOW_QUALITY"
+STATUS_DUPLICATE = "DUPLICATE"
+STATUS_NEEDS_RELEASE = "NEEDS_RELEASE"
+STATUS_REVIEW = "REVIEW"
+STATUS_ERROR = "ERROR"
+STATUS_ERROR_PERMANENT = "ERROR_PERMANENT"
+
+# ──────────────────────────── HELPERS ─────────────────────────────────────
 
 def find_exiftool() -> str:
-    """Look for exiftool next to this script first, then fall back to PATH."""
     candidate = SCRIPT_DIR / ("exiftool.exe" if os.name == "nt" else "exiftool")
     if candidate.exists():
         return str(candidate)
@@ -61,11 +96,7 @@ SHUTTERSTOCK_CATEGORIES = {
     "Parks/Outdoor", "People", "Religion", "Science", "Signs/Symbols",
     "Sports/Recreation", "Technology", "Transportation", "Vintage",
 }
-# ^ double-check this against the live category list on
-#   submit.shutterstock.com if anything seems off — agencies do
-#   occasionally add/rename categories.
 
-# ──────────────────────────── THE PROMPT ──────────────────────────────────
 PROMPT = """You are a senior commercial stock photo editor and SEO copywriter
 working for contributors selling on Shutterstock, Adobe Stock, and similar
 microstock marketplaces. Buyers find images almost entirely through search,
@@ -95,95 +126,69 @@ functions like a searchable headline, not a caption:
   backstory, location, or emotion that isn't visually evident.
 - 8-18 words, under 180 characters. No camera/lens jargon ("shot on",
   "bokeh", "f/2.8"). No filler like "stock photo of" or "image showing".
-- Example of the right register: "Young woman drinking coffee at laptop in
-  sunlit home office" — not "A nice photo of someone working."
 
-DESCRIPTION — used only in the embedded file metadata (read by Adobe Stock):
+DESCRIPTION — used only in the embedded file metadata:
 - 1-2 plain sentences. Concrete subject + setting + likely use, in your own
-  words. Don't just repeat the title — add the detail it didn't have room for.
+  words.
 
-KEYWORDS — 40 to 50 terms, ordered MOST to LEAST important. This drives
-discoverability more than anything else on this list, so take it seriously:
-- Use singular nouns ("mountain" not "mountains") unless the plural is the
-  natural search term.
-- Layer 1 (~15 terms): literal subjects, objects, and setting visible in
-  the frame.
-- Layer 2 (~10 terms): concepts/emotions buyers search by (e.g. teamwork,
-  freedom, mindfulness, growth, isolation, celebration) — ONLY if visually
-  justified by composition, expression, or context. Never invented.
-- Layer 3 (~10 terms): commercial use-case terms (e.g. copy space,
-  background, banner, advertising, website, blog, presentation, lifestyle,
-  wellness, technology).
-- Layer 4 (remaining): visual descriptors that affect search — dominant
-  colors, lighting (golden hour, backlit, natural light), composition
-  (close-up, top view, negative space), season, time of day.
-- Never invent a location, brand name, trademark, or named landmark you
-  cannot positively confirm. No keyword stuffing — every term must
-  genuinely apply to this image.
+KEYWORDS — 40 to 50 terms, ordered MOST to LEAST important:
+- Layer literal subjects, concepts, use-cases, and visual descriptors.
+- Never invent a location, brand name, trademark, or named landmark.
+- No keyword stuffing.
 
 CATEGORY / CATEGORY2:
-- "category" is REQUIRED — pick exactly ONE from this list (copy exactly):
+- "category" is REQUIRED — pick exactly ONE from this list:
   Abstract, Animals/Wildlife, The Arts, Backgrounds/Textures, Beauty/Fashion,
-  Buildings/Landmarks, Business/Finance, Celebrities, Education, Food and
-  Drink, Healthcare/Medical, Holidays, Industrial, Interiors, Miscellaneous,
-  Nature, Objects, Parks/Outdoor, People, Religion, Science, Signs/Symbols,
+  Buildings/Landmarks, Business/Finance, Celebrities, Education, Food and Drink,
+  Healthcare/Medical, Holidays, Industrial, Interiors, Miscellaneous, Nature,
+  Objects, Parks/Outdoor, People, Religion, Science, Signs/Symbols,
   Sports/Recreation, Technology, Transportation, Vintage
-- "category2" is OPTIONAL — fill it ONLY if a second category from the same
-  list is clearly also applicable (Shutterstock allows up to 2 and a good
-  second category genuinely increases discoverability). Otherwise return "".
+- "category2" is OPTIONAL — fill it only if clearly applicable.
 
-COMMERCIAL_SCORE: integer 0-100. How sellable is THIS specific frame today —
-weigh sharpness/focus, lighting, composition and negative space, how
-oversaturated this subject already is on stock sites, and whether there's
-an obvious buyer (advertising, editorial, blog, web design, print).
+COMMERCIAL_SCORE: integer 0-100. How sellable is THIS specific frame today.
 
-REJECTION_RISK: exactly one of — Low / Medium / High — your honest estimate
-of the odds a human reviewer rejects this for quality or commercial-value
-reasons.
+REJECTION_RISK: exactly one of — Low / Medium / High.
 
-REJECTION_REASON: if rejection_risk is Medium or High, ONE short, specific,
-actionable sentence on what's wrong (e.g. "Slightly soft focus on the main
-subject" or "Subject is extremely common on stock sites without a unique
-angle"). If rejection_risk is Low, return "".
+REJECTION_REASON: if risk is Medium or High, one short actionable sentence.
+If Low, return "".
 
 PEOPLE_VISIBLE: true if any recognizable human face or person appears in
-the frame, even partially — the contributor needs a signed model release to
-sell this commercially, so flag honestly rather than guessing low.
+the frame, even partially.
 
 PROPERTY_OR_TRADEMARK_VISIBLE: true if a recognizable logo, branded product,
 artwork, or distinctive private property/architecture appears that would
-need a property release or could cause a rejection.
+need a release or could cause a rejection.
 
 Return JSON only."""
 
-# ──────────────────────────── REGISTRY HELPERS ────────────────────────────
+# ──────────────────────────── FILE SYSTEM / REGISTRY ──────────────────────
 
 def load_registry(folder: Path) -> dict:
-    p = folder / ".pipeline_registry.json"
-    if not p.exists():
+    path = folder / ".pipeline_registry.json"
+    if not path.exists():
         return {}
-    raw = json.loads(p.read_text())
-    norm = {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+    normalized = {}
     for name, value in raw.items():
         if isinstance(value, str):
-            # legacy format from the original script — give old "error"
-            # entries a fresh chance to retry instead of blacklisting forever
-            norm[name] = {"status": value, "attempts": 0 if value == "error" else 1}
+            normalized[name] = {"status": value, "attempts": 0 if value == "error" else 1}
         else:
-            norm[name] = value
-    return norm
+            normalized[name] = value
+    return normalized
 
 
-def save_registry(folder: Path, reg: dict):
-    p = folder / ".pipeline_registry.json"
-    p.write_text(json.dumps(reg, indent=2))
+def save_registry(folder: Path, registry: dict):
+    path = folder / ".pipeline_registry.json"
+    path.write_text(json.dumps(registry, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def mark_registry(folder: Path, registry: dict, names: set, status: str, **extra):
-    """Marks one or more filenames (e.g. an original PNG and its
-    auto-converted _ready.jpg) with the same status in one go."""
-    for n in names:
-        registry[n] = {"status": status, **extra}
+def mark_registry(folder: Path, registry: dict, names: Iterable[str], status: str, **extra):
+    for name in names:
+        registry[name] = {"status": status, **extra}
     save_registry(folder, registry)
 
 
@@ -192,13 +197,68 @@ def is_pending(name: str, registry: dict) -> bool:
     if entry is None:
         return True
     status = entry.get("status")
-    if status in ("done", "skipped", "skipped_lowres", "error_permanent", "converted"):
+    if status in {STATUS_READY, STATUS_LOWRES, STATUS_LOWQUALITY, STATUS_DUPLICATE, STATUS_NEEDS_RELEASE, STATUS_REVIEW, STATUS_ERROR_PERMANENT}:
         return False
-    if status == "error":
+    if status == STATUS_ERROR:
         return entry.get("attempts", 0) < MAX_ATTEMPTS
     return True
 
-# ──────────────────────────── FUNCTIONS ───────────────────────────────────
+
+def ensure_dir(path: Path):
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_output_dirs(folder: Path):
+    for name in DESTINATION_FOLDERS:
+        ensure_dir(folder / name)
+    ensure_dir(folder / ".stockflow_work")
+
+
+def safe_unique_path(dest_dir: Path, filename: str) -> Path:
+    candidate = dest_dir / filename
+    if not candidate.exists():
+        return candidate
+
+    stem = candidate.stem
+    suffix = candidate.suffix
+    n = 2
+    while True:
+        test = dest_dir / f"{stem}-{n}{suffix}"
+        if not test.exists():
+            return test
+        n += 1
+
+
+def slugify(text: str, max_len: int = 80) -> str:
+    text = text.strip().lower()
+    text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
+    text = re.sub(r"[\s_]+", "-", text)
+    text = re.sub(r"-{2,}", "-", text).strip("-")
+    if not text:
+        text = "image"
+    return text[:max_len].strip("-") or "image"
+
+
+def rename_from_title(title: str, original: Path, status: str) -> str:
+    base = slugify(title if title else original.stem)
+    ext = ".jpg" if status in {STATUS_READY, STATUS_REVIEW, STATUS_NEEDS_RELEASE, STATUS_LOWQUALITY} else original.suffix.lower()
+    return f"{base}{ext}"
+
+
+def move_into_folder(src: Path, folder: Path, new_name: str | None = None) -> Path:
+    ensure_dir(folder)
+    target_name = new_name or src.name
+    target = safe_unique_path(folder, target_name)
+    return Path(shutil.move(str(src), str(target)))
+
+
+def compute_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
 
 def check_exiftool() -> bool:
     try:
@@ -207,6 +267,7 @@ def check_exiftool() -> bool:
     except Exception:
         return False
 
+# ──────────────────────────── IMAGE PROCESSING ────────────────────────────
 
 def resize_for_api(path: Path) -> bytes:
     img = Image.open(path).convert("RGB")
@@ -216,36 +277,24 @@ def resize_for_api(path: Path) -> bytes:
     return buf.getvalue()
 
 
-def normalize_image(path: Path) -> Path:
-    """
-    Makes sure the file is actually upload-ready before we spend an API
-    call on it: converts PNG -> JPEG (Shutterstock wants JPEG/TIFF, not
-    PNG) and shrinks anything over MAX_FILE_SIZE_MB. Never touches the
-    original — writes a "<name>_ready.jpg" copy alongside it when a
-    change is needed, and returns that path. Returns the original path
-    unchanged if no fix is needed.
-    """
+def normalize_image(path: Path, work_dir: Path) -> Path:
     size_mb = path.stat().st_size / (1024 * 1024)
     needs_convert = path.suffix.lower() == ".png"
     needs_shrink = size_mb > MAX_FILE_SIZE_MB
     if not needs_convert and not needs_shrink:
         return path
 
-    img = Image.open(path).convert("RGB")
-    out_path = path.with_name(path.stem + "_ready.jpg")
+    ensure_dir(work_dir)
+    out_path = work_dir / f"{path.stem}_ready.jpg"
 
+    img = Image.open(path).convert("RGB")
     quality = 92
     img.save(out_path, format="JPEG", quality=quality)
 
-    # still too big? step quality down first to preserve resolution
     while out_path.stat().st_size / (1024 * 1024) > MAX_FILE_SIZE_MB and quality > 60:
         quality -= 10
         img.save(out_path, format="JPEG", quality=quality)
 
-    # still too big even at low quality (huge TIFF/scan)? scale dimensions down too.
-    # LANCZOS resampling is the same high-quality filter pro tools use, but any
-    # resize softens fine detail slightly — a light unsharp pass afterward
-    # recovers the perceived sharpness reviewers look for.
     scale = 1.0
     while out_path.stat().st_size / (1024 * 1024) > MAX_FILE_SIZE_MB and scale > 0.5:
         scale -= 0.1
@@ -258,15 +307,13 @@ def normalize_image(path: Path) -> Path:
 
 
 def extract_json_text(text: str) -> str:
-    """Defensively strip ```json fences if the model ever adds them."""
     text = text.strip()
     fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
     return fence.group(1).strip() if fence else text
 
 
 def validate_response(data: dict):
-    required = ["title", "description", "keywords", "category",
-                "commercial_score", "rejection_risk"]
+    required = ["title", "description", "keywords", "category", "commercial_score", "rejection_risk"]
     missing = [k for k in required if k not in data]
     if missing:
         raise ValueError(f"Model response missing keys: {missing}")
@@ -275,7 +322,6 @@ def validate_response(data: dict):
 
 
 def call_gemini(client, image_bytes: bytes, max_retries: int = 3) -> dict:
-    """Calls Gemini with automatic backoff-retry for transient errors."""
     last_err = None
     for attempt in range(1, max_retries + 1):
         try:
@@ -307,12 +353,13 @@ def call_gemini(client, image_bytes: bytes, max_retries: int = 3) -> dict:
     raise last_err
 
 
-def embed_metadata(path: Path, title: str, description: str, keywords: list):
+def embed_metadata(path: Path, title: str, description: str, keywords: list[str]):
     kw_args = []
     for kw in keywords:
         kw_args += [f"-Keywords+={kw}", f"-XMP-dc:Subject+={kw}"]
     cmd = [
-        EXIFTOOL, "-overwrite_original",
+        EXIFTOOL,
+        "-overwrite_original",
         f"-Title={title}",
         f"-Description={description}",
         f"-Caption-Abstract={description}",
@@ -326,16 +373,13 @@ def embed_metadata(path: Path, title: str, description: str, keywords: list):
         raise RuntimeError(f"exiftool failed: {result.stderr.strip()}")
 
 
-def write_csv_row(csv_path: Path, filename: str, title: str, keywords: list,
-                   category: str, category2: str):
+def write_csv_row(csv_path: Path, filename: str, title: str, keywords: list[str], category: str, category2: str):
     categories = ", ".join(c for c in (category, category2) if c)
     write_header = not csv_path.exists()
     with open(csv_path, "a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         if write_header:
             w.writerow(["Filename", "Description", "Keywords", "Categories"])
-        # Shutterstock's "Description" column is the searchable title field,
-        # not a long caption — this matches their own contributor docs.
         w.writerow([filename, title, ", ".join(keywords), categories])
 
 
@@ -343,11 +387,58 @@ def log(review_log: Path, line: str):
     with open(review_log, "a", encoding="utf-8") as f:
         f.write(line.rstrip("\n") + "\n")
 
+
+def short_review_reason(data: dict) -> str:
+    reason = data.get("rejection_reason", "").strip()
+    return reason
+
+
+def choose_status(score: int, risk: str, people_visible: bool, property_visible: bool) -> str:
+    if people_visible or property_visible:
+        return STATUS_NEEDS_RELEASE
+    if score < MIN_SCORE:
+        return STATUS_LOWQUALITY
+    if risk in {"Medium", "High"}:
+        return STATUS_REVIEW
+    return STATUS_READY
+
+# ──────────────────────────── REPORTING ───────────────────────────────────
+
+def write_report(report_dir: Path, records: list[dict], summary: dict):
+    ensure_dir(report_dir)
+    json_path = report_dir / "report.json"
+    csv_path = report_dir / "report.csv"
+
+    json_path.write_text(json.dumps({"summary": summary, "items": records}, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "original_name", "final_name", "status", "score", "risk", "category",
+            "category2", "title", "destination", "reason", "people_visible",
+            "property_or_trademark_visible"
+        ])
+        for r in records:
+            writer.writerow([
+                r.get("original_name", ""),
+                r.get("final_name", ""),
+                r.get("status", ""),
+                r.get("score", ""),
+                r.get("risk", ""),
+                r.get("category", ""),
+                r.get("category2", ""),
+                r.get("title", ""),
+                r.get("destination", ""),
+                r.get("reason", ""),
+                r.get("people_visible", False),
+                r.get("property_or_trademark_visible", False),
+            ])
+
 # ──────────────────────────── MAIN ────────────────────────────────────────
 
 def main():
     if len(sys.argv) < 2:
-        print('Usage:  python stock_pipeline_v2.py "D:\\Photos\\batch_01"')
+        print('Usage:  python stockflow.py "D:\\Photos\\batch_01"')
         sys.exit(1)
 
     folder = Path(sys.argv[1]).expanduser().resolve()
@@ -355,10 +446,11 @@ def main():
         print(f"Folder not found: {folder}")
         sys.exit(1)
 
+    ensure_output_dirs(folder)
+
     if not check_exiftool():
         print(f"\nCan't run exiftool ({EXIFTOOL}).")
-        print("Put exiftool.exe in the same folder as this script,")
-        print("or make sure 'exiftool' is on your system PATH, then try again.\n")
+        print("Put exiftool.exe in the same folder as this script, or make sure 'exiftool' is on your PATH.")
         sys.exit(1)
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -368,74 +460,115 @@ def main():
         print("Then close and reopen PowerShell, and try again.\n")
         sys.exit(1)
 
-    client     = genai.Client(api_key=api_key)
-    registry   = load_registry(folder)
-    csv_path   = folder / "shutterstock_upload.csv"
-    review_log = folder / "needs_review.txt"
+    client = genai.Client(api_key=api_key)
+    registry = load_registry(folder)
+
+    csv_path = folder / FOLDER_REPORTS / "shutterstock_upload.csv"
+    review_log = folder / FOLDER_REPORTS / "needs_review.txt"
+    source_archive = folder / FOLDER_SOURCE_ORIGINALS
+    ready_dir = folder / FOLDER_READY
+    lowres_dir = folder / FOLDER_LOWRES
+    lowquality_dir = folder / FOLDER_LOWQUALITY
+    dup_dir = folder / FOLDER_DUPLICATES
+    needs_release_dir = folder / FOLDER_NEEDS_RELEASE
+    review_dir = folder / FOLDER_REVIEW
+    report_dir = folder / FOLDER_REPORTS
+    work_dir = folder / ".stockflow_work"
 
     all_images = sorted(
         p for p in folder.iterdir()
-        if p.suffix.lower() in IMAGE_TYPES and is_pending(p.name, registry)
+        if p.is_file() and p.suffix.lower() in IMAGE_TYPES and is_pending(p.name, registry)
     )
 
     if not all_images:
-        print("Nothing left to process in this folder (or everything already done/skipped).")
+        print("Nothing left to process in this folder (or everything already handled).")
         return
 
     batch = all_images[:BATCH_LIMIT]
     print(f"\nFolder: {folder}")
     print(f"Pending: {len(all_images)} images. Processing {len(batch)} this run.")
     print(f"Skipping anything scored below {MIN_SCORE}/100 or under {MIN_MEGAPIXELS}MP.\n")
+    print(f"Output folders will be created under: {folder}\n")
 
-    uploaded = 0
-    skipped  = 0
-    flagged  = 0
+    seen_hashes: dict[str, str] = {}
+    records: list[dict] = []
+
+    counts = {
+        STATUS_READY: 0,
+        STATUS_LOWRES: 0,
+        STATUS_LOWQUALITY: 0,
+        STATUS_DUPLICATE: 0,
+        STATUS_NEEDS_RELEASE: 0,
+        STATUS_REVIEW: 0,
+        STATUS_ERROR: 0,
+        STATUS_ERROR_PERMANENT: 0,
+    }
 
     for i, path in enumerate(batch, 1):
         print(f"[{i}/{len(batch)}] {path.name}", end=" ... ", flush=True)
         names = {path.name}
+        work_path = path
+        prepared = False
+        temp_created = False
+        file_hash = None
 
         try:
-            # ── auto file-prep: fix PNG/oversize issues before anything else ──
-            work_path = normalize_image(path)
-            if work_path != path:
-                names.add(work_path.name)
+            file_hash = compute_sha256(path)
+            if file_hash in seen_hashes:
+                print(f"DUPLICATE (same as {seen_hashes[file_hash]})")
+                dup_name = rename_from_title("", path, STATUS_DUPLICATE)
+                dup_final = move_into_folder(path, dup_dir, dup_name)
+                mark_registry(folder, registry, names, STATUS_DUPLICATE, attempts=0, destination=FOLDER_DUPLICATES, final_name=dup_final.name, hash=file_hash, duplicate_of=seen_hashes[file_hash])
+                counts[STATUS_DUPLICATE] += 1
+                records.append({
+                    "original_name": path.name,
+                    "final_name": dup_final.name,
+                    "status": STATUS_DUPLICATE,
+                    "destination": FOLDER_DUPLICATES,
+                    "hash": file_hash,
+                    "duplicate_of": seen_hashes[file_hash],
+                })
+                continue
+
+            seen_hashes[file_hash] = path.name
+
+            work_path = normalize_image(path, work_dir)
+            prepared = work_path != path
+            temp_created = prepared
+            if prepared:
                 print(f"(prepared as {work_path.name}) ", end="", flush=True)
                 log(review_log, f"NOTE  {path.name}  auto-prepared for upload -> {work_path.name}")
 
-            # ── resolution pre-check — skip BEFORE spending an API call ──
             with Image.open(work_path) as probe:
                 mp = (probe.size[0] * probe.size[1]) / 1_000_000
             if mp < MIN_MEGAPIXELS:
-                print(f"SKIPPED (too small: {mp:.1f}MP, need {MIN_MEGAPIXELS}MP+)")
-                log(review_log, f"SKIPPED  {path.name}  resolution={mp:.1f}MP (need {MIN_MEGAPIXELS}MP+)")
-                mark_registry(folder, registry, names, "skipped_lowres", attempts=0)
-                skipped += 1
+                print(f"SKIPPED low-res ({mp:.1f}MP, need {MIN_MEGAPIXELS}MP+)")
+                final_name = rename_from_title("", path, STATUS_LOWRES)
+                dest = move_into_folder(path, lowres_dir, final_name)
+                if prepared and work_path.exists():
+                    work_path.unlink(missing_ok=True)
+                mark_registry(folder, registry, names, STATUS_LOWRES, attempts=0, destination=FOLDER_LOWRES, final_name=dest.name, megapixels=round(mp, 2), hash=file_hash)
+                counts[STATUS_LOWRES] += 1
+                records.append({
+                    "original_name": path.name,
+                    "final_name": dest.name,
+                    "status": STATUS_LOWRES,
+                    "destination": FOLDER_LOWRES,
+                    "megapixels": round(mp, 2),
+                    "hash": file_hash,
+                })
                 continue
 
             img_bytes = resize_for_api(work_path)
-            data      = call_gemini(client, img_bytes)
+            data = call_gemini(client, img_bytes)
 
             score = int(data.get("commercial_score", 0))
-            risk  = data.get("rejection_risk", "Unknown")
-            reason = data.get("rejection_reason", "")
-
-            if risk in ("Medium", "High") and reason:
-                log(review_log, f"RISK={risk}  {path.name}  {reason}")
-
-            if score < MIN_SCORE:
-                print(f"SKIPPED (score {score}/100, risk: {risk})")
-                log(review_log, f"SKIPPED  {path.name}  score={score}  risk={risk}")
-                mark_registry(folder, registry, names, "skipped", attempts=0)
-                skipped += 1
-                time.sleep(PAUSE_SECONDS)
-                continue
-
-            title       = data["title"].strip()
-            description = data["description"].strip()
-            keywords    = [k.strip() for k in data["keywords"] if k.strip()]
-            category    = data.get("category", "").strip()
-            category2   = data.get("category2", "").strip()
+            risk = str(data.get("rejection_risk", "Unknown")).strip()
+            reason = short_review_reason(data)
+            people_visible = bool(data.get("people_visible", False))
+            property_visible = bool(data.get("property_or_trademark_visible", False))
+            category = str(data.get("category", "")).strip()
+            category2 = str(data.get("category2", "")).strip()
 
             if category not in SHUTTERSTOCK_CATEGORIES:
                 log(review_log, f"BAD CATEGORY  {path.name}  got='{category}'")
@@ -443,43 +576,138 @@ def main():
             if category2 and (category2 not in SHUTTERSTOCK_CATEGORIES or category2 == category):
                 category2 = ""
 
-            embed_metadata(work_path, title, description, keywords)
-            write_csv_row(csv_path, work_path.name, title, keywords, category, category2)
+            status = choose_status(score, risk, people_visible, property_visible)
 
-            mark_registry(folder, registry, names, "done", attempts=0)
-            uploaded += 1
+            # store a human-readable explanation in the review log for anything not READY
+            if status in {STATUS_NEEDS_RELEASE, STATUS_REVIEW, STATUS_LOWQUALITY} and reason:
+                log(review_log, f"{status}  {path.name}  {reason}")
+            if status == STATUS_NEEDS_RELEASE:
+                if people_visible:
+                    log(review_log, f"FLAG  {path.name}  PEOPLE — model release needed")
+                if property_visible:
+                    log(review_log, f"FLAG  {path.name}  PROPERTY/TRADEMARK — release may be needed")
 
-            flags = []
-            if data.get("people_visible"):
-                flags.append("PEOPLE — model release needed")
-            if data.get("property_or_trademark_visible"):
-                flags.append("PROPERTY/TRADEMARK — release may be needed")
-            if flags:
-                flagged += 1
-                log(review_log, f"FLAG  {path.name}  " + " & ".join(flags))
+            title = str(data["title"]).strip()
+            description = str(data["description"]).strip()
+            keywords = [k.strip() for k in data["keywords"] if str(k).strip()]
 
-            flag_str = f"  [!] {' & '.join(flags)}" if flags else ""
-            print(f"OK  score={score}/100  risk={risk}  keywords={len(keywords)}{flag_str}")
+            final_name = rename_from_title(title, path, status)
+            destination_dir = {
+                STATUS_READY: ready_dir,
+                STATUS_LOWQUALITY: lowquality_dir,
+                STATUS_NEEDS_RELEASE: needs_release_dir,
+                STATUS_REVIEW: review_dir,
+            }.get(status, review_dir)
+
+            # write metadata for anything potentially usable later
+            if status in {STATUS_READY, STATUS_NEEDS_RELEASE, STATUS_REVIEW}:
+                embed_metadata(work_path, title, description, keywords)
+
+            # move the processed file into its final bucket
+            if prepared:
+                moved_final = move_into_folder(work_path, destination_dir, final_name)
+                # archive the original source so the working folder becomes clean
+                if path.exists():
+                    move_into_folder(path, source_archive, path.name)
+            else:
+                moved_final = move_into_folder(path, destination_dir, final_name)
+
+            if status == STATUS_READY:
+                write_csv_row(csv_path, moved_final.name, title, keywords, category, category2)
+
+            mark_registry(
+                folder,
+                registry,
+                names,
+                status,
+                attempts=0,
+                destination=destination_dir.name,
+                final_name=moved_final.name,
+                score=score,
+                risk=risk,
+                category=category,
+                category2=category2,
+                hash=file_hash,
+                people_visible=people_visible,
+                property_or_trademark_visible=property_visible,
+            )
+
+            counts[status] += 1
+
+            records.append({
+                "original_name": path.name,
+                "final_name": moved_final.name,
+                "status": status,
+                "score": score,
+                "risk": risk,
+                "category": category,
+                "category2": category2,
+                "title": title,
+                "destination": destination_dir.name,
+                "reason": reason,
+                "people_visible": people_visible,
+                "property_or_trademark_visible": property_visible,
+                "hash": file_hash,
+            })
+
+            if status == STATUS_READY:
+                print(f"READY  score={score}/100  risk={risk}  keywords={len(keywords)}")
+            elif status == STATUS_LOWQUALITY:
+                print(f"LOW QUALITY  score={score}/100  risk={risk}")
+            elif status == STATUS_REVIEW:
+                print(f"REVIEW  score={score}/100  risk={risk}")
+            elif status == STATUS_NEEDS_RELEASE:
+                print(f"NEEDS RELEASE  score={score}/100  risk={risk}")
+            else:
+                print(f"{status}  score={score}/100  risk={risk}")
 
         except Exception as e:
             attempts = registry.get(path.name, {}).get("attempts", 0) + 1
-            status = "error" if attempts < MAX_ATTEMPTS else "error_permanent"
+            status = STATUS_ERROR if attempts < MAX_ATTEMPTS else STATUS_ERROR_PERMANENT
             print(f"ERROR (attempt {attempts}/{MAX_ATTEMPTS}) — {e}")
             log(review_log, f"ERROR  {path.name}  attempt={attempts}  {e}")
-            mark_registry(folder, registry, names, status, attempts=attempts, last_error=str(e)[:300])
+            mark_registry(folder, registry, names, status, attempts=attempts, last_error=str(e)[:300], hash=file_hash)
+            counts[status] += 1
+            records.append({
+                "original_name": path.name,
+                "final_name": "",
+                "status": status,
+                "error": str(e),
+                "hash": file_hash,
+            })
 
         time.sleep(PAUSE_SECONDS)
 
-    remaining = len(all_images) - len(batch)
+    summary = {
+        "processed_this_run": len(batch),
+        "ready_to_upload": counts[STATUS_READY],
+        "low_res": counts[STATUS_LOWRES],
+        "low_quality": counts[STATUS_LOWQUALITY],
+        "duplicates": counts[STATUS_DUPLICATE],
+        "needs_release": counts[STATUS_NEEDS_RELEASE],
+        "review": counts[STATUS_REVIEW],
+        "errors": counts[STATUS_ERROR] + counts[STATUS_ERROR_PERMANENT],
+        "remaining": len(all_images) - len(batch),
+        "folder": str(folder),
+    }
+
+    write_report(report_dir, records, summary)
+
     print(f"\n── Done ─────────────────────────────────────────")
     print(f"   Processed this run    : {len(batch)}")
-    print(f"   Ready to upload       : {uploaded}")
-    print(f"   Skipped (score/size)  : {skipped}")
-    print(f"   Flagged (need release): {flagged}")
-    print(f"   Still pending         : {remaining} (run again to continue)")
+    print(f"   Ready to upload       : {counts[STATUS_READY]}")
+    print(f"   Low resolution        : {counts[STATUS_LOWRES]}")
+    print(f"   Low quality           : {counts[STATUS_LOWQUALITY]}")
+    print(f"   Duplicates            : {counts[STATUS_DUPLICATE]}")
+    print(f"   Needs release         : {counts[STATUS_NEEDS_RELEASE]}")
+    print(f"   Review                : {counts[STATUS_REVIEW]}")
+    print(f"   Errors                : {counts[STATUS_ERROR] + counts[STATUS_ERROR_PERMANENT]}")
+    print(f"   Still pending         : {summary['remaining']} (run again to continue)")
     print(f"   CSV ready at          : {csv_path}")
+    print(f"   Report JSON           : {report_dir / 'report.json'}")
+    print(f"   Report CSV            : {report_dir / 'report.csv'}")
     if review_log.exists():
-        print(f"   Review log            : {review_log}  <- check this before uploading")
+        print(f"   Review log            : {review_log}")
     print()
 
 
