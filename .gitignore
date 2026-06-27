@@ -1,18 +1,28 @@
+# ExifTool binaries
+exiftool.exe
+exiftool_files/
+
+# Python cache
 __pycache__/
 *.pyc
 
-.venv/
-
-.pipeline_registry.json
-
-needs_review.txt
-
-shutterstock_upload.csv
-
-*_ready.jpg
-
-exiftool.exe
-
+# Local environment
 .env
+.env.*
 
-.vscode/
+# OS files
+Thumbs.db
+.DS_Store
+
+# VS Code settings (optional)
+.vscode/settings.json
+
+# Processing outputs
+Reports/
+00_SOURCE_ORIGINALS/
+01_READY_UPLOAD/
+02_SKIPPED_LOWRES/
+03_SKIPPED_LOWQUALITY/
+04_DUPLICATES/
+05_NEEDS_RELEASE/
+06_REVIEW/

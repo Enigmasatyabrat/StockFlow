@@ -1,16 +1,24 @@
 
 """
-StockFlow v4
+StockFlow v4.1
 =============
 AI-powered workflow for preparing stock photography for Shutterstock,
 Adobe Stock, and other stock marketplaces.
 
-v4 focus:
-- automatic folder organization
-- smart rename of best assets
-- low-res / low-quality / release-needed / duplicate separation
-- ready-to-upload folder for the best images only
-- report generation
+v4.1 focus (on top of v4):
+- distinguishes daily-quota exhaustion (stop cleanly, no blacklisting)
+  from short rate-limit bursts and transient 503 overload (retry both,
+  using Google's own suggested retry delay when it's given to us)
+- every classification now carries a guaranteed, human-readable reason
+- keyword post-processing: dedupe, drop crude singular/plural repeats,
+  hard cap at 50
+- perceptual-hash near-duplicate flagging alongside the existing exact
+  (SHA-256) duplicate detection — logged, not auto-moved, since visually
+  similar shots are often still independently worth submitting
+- tightened prompt: explicit scoring rubric, anti-hallucination guard,
+  and tighter rules for when people/property should actually be flagged
+- startup diagnostics banner + richer end-of-run report (duration,
+  average score, average keyword count, category mix, retry counts)
 
 Author: Satyabrat Mishra
 License: Apache-2.0
@@ -23,21 +31,24 @@ import hashlib
 import io
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import imagehash
 from google import genai
 from google.genai import types
 from PIL import Image, ImageFilter
 
 # ──────────────────────────── SETTINGS ────────────────────────────────────
 SCRIPT_DIR       = Path(__file__).resolve().parent
-MODEL            = "gemini-2.5-flash"
+MODEL            = "gemini-2.5-flash-lite"
 BATCH_LIMIT      = 50
 PAUSE_SECONDS    = 4
 MIN_SCORE        = 60
@@ -46,6 +57,14 @@ MIN_MEGAPIXELS   = 4.0
 MAX_FILE_SIZE_MB = 50
 MAX_ATTEMPTS     = 3
 IMAGE_TYPES      = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+DUPLICATE_HASH_THRESHOLD = 6   # perceptual-hash Hamming distance (0-64); lower = stricter
+VERSION = "4.1.0"
+
+
+class DailyQuotaExhausted(Exception):
+    """Raised when the model's whole-day free quota is gone — not the photo's fault,
+    so the run should stop cleanly instead of retrying or blacklisting anything."""
+    pass
 
 # Output folders
 FOLDER_SOURCE_ORIGINALS = "00_SOURCE_ORIGINALS"
@@ -99,9 +118,11 @@ SHUTTERSTOCK_CATEGORIES = {
 
 PROMPT = """You are a senior commercial stock photo editor and SEO copywriter
 working for contributors selling on Shutterstock, Adobe Stock, and similar
-microstock marketplaces. Buyers find images almost entirely through search,
-so the title and keywords must be written in language buyers actually type —
-not artistic or poetic language.
+microstock marketplaces. You have personally reviewed tens of thousands of
+submissions and know exactly what separates a top-selling asset from a
+forgettable one. Buyers find images almost entirely through search, so the
+title and keywords must be written in language buyers actually type — not
+artistic or poetic language.
 
 Analyze the attached image and return ONLY valid JSON with exactly these keys
 (no markdown, no commentary, no backticks):
@@ -119,22 +140,39 @@ Analyze the attached image and return ONLY valid JSON with exactly these keys
   "property_or_trademark_visible": false
 }
 
+ANTI-HALLUCINATION RULE (applies to every field below): only describe what
+you can actually see. If you are not confident about a species, location,
+brand, material, or backstory, leave it out rather than guess. A vague-but-
+true keyword beats a specific-but-wrong one — wrong facts get submissions
+rejected and can get a contributor account flagged.
+
 TITLE — this also becomes the Shutterstock "Description" field, which
 functions like a searchable headline, not a caption:
-- Put the single most-searched subject/concept in the first few words.
-- Strictly factual: describe what is literally visible. Never invent a
-  backstory, location, or emotion that isn't visually evident.
+- First identify, mentally, the single concept a buyer would most likely
+  type into a search box to find this exact image. Lead the title with it.
+- Strictly factual: describe what is literally visible.
 - 8-18 words, under 180 characters. No camera/lens jargon ("shot on",
   "bokeh", "f/2.8"). No filler like "stock photo of" or "image showing".
+- Good: "Woman drinking coffee at laptop in sunlit home office"
+- Bad (too vague, no buyer would search this): "A nice moment indoors"
+- Bad (camera jargon, buyers don't search this way): "Shallow DOF shot of
+  a woman, 50mm f/1.8"
 
 DESCRIPTION — used only in the embedded file metadata:
 - 1-2 plain sentences. Concrete subject + setting + likely use, in your own
-  words.
+  words. Don't just restate the title.
 
-KEYWORDS — 40 to 50 terms, ordered MOST to LEAST important:
-- Layer literal subjects, concepts, use-cases, and visual descriptors.
-- Never invent a location, brand name, trademark, or named landmark.
-- No keyword stuffing.
+KEYWORDS — 40 to 50 terms, ordered MOST to LEAST important. This is the
+single biggest driver of whether this image ever gets found:
+- Layer 1 (literal): every concrete subject, object, and setting actually
+  visible in the frame.
+- Layer 2 (concept): emotions/ideas a buyer searches by (teamwork, freedom,
+  growth, mindfulness) — ONLY if visually justified, never invented.
+- Layer 3 (use-case): commercial terms buyers search for (copy space,
+  background, banner, advertising, website, blog, presentation).
+- Layer 4 (descriptive): color, lighting, composition, season, time of day.
+- Use singular nouns unless the plural is the natural search term.
+- No keyword stuffing — every term must genuinely apply.
 
 CATEGORY / CATEGORY2:
 - "category" is REQUIRED — pick exactly ONE from this list:
@@ -145,19 +183,37 @@ CATEGORY / CATEGORY2:
   Sports/Recreation, Technology, Transportation, Vintage
 - "category2" is OPTIONAL — fill it only if clearly applicable.
 
-COMMERCIAL_SCORE: integer 0-100. How sellable is THIS specific frame today.
+COMMERCIAL_SCORE: integer 0-100, built from this rubric so scores stay
+consistent across images rather than feeling like a vibe check:
+- Technical quality (sharpness, exposure, noise) — up to 30 points
+- Composition (framing, negative space, clutter) — up to 25 points
+- Market demand (is this a subject buyers actually search for?) — up to 25
+- Distinctiveness (does it stand out from the thousands of similar stock
+  shots of this same subject, or is it generic?) — up to 20
 
-REJECTION_RISK: exactly one of — Low / Medium / High.
+REJECTION_RISK: exactly one of — Low / Medium / High, based on the same
+rubric above.
 
-REJECTION_REASON: if risk is Medium or High, one short actionable sentence.
-If Low, return "".
+REJECTION_REASON: if risk is Medium or High, ONE short, specific, actionable
+sentence naming the actual weak point (e.g. "Slight motion blur on the main
+subject's hands" or "Extremely common subject with no distinctive angle").
+Never leave this blank when risk is Medium or High — if you're not sure,
+say "Generally below the commercial bar for this subject matter" rather
+than returning an empty string. If risk is Low, return "".
 
-PEOPLE_VISIBLE: true if any recognizable human face or person appears in
-the frame, even partially.
+PEOPLE_VISIBLE: true ONLY if an actual real, identifiable human face or
+body is visible, even partially. Do NOT mark this true for: statues,
+mannequins, paintings/illustrations of people, reflections that are too
+distorted to identify, or silhouettes with no identifiable features. When
+genuinely unsure whether a face is identifiable, default to true — false
+negatives here cause real legal exposure for the contributor, so err
+toward caution, but don't flag things that obviously aren't people.
 
-PROPERTY_OR_TRADEMARK_VISIBLE: true if a recognizable logo, branded product,
-artwork, or distinctive private property/architecture appears that would
-need a release or could cause a rejection.
+PROPERTY_OR_TRADEMARK_VISIBLE: true ONLY if a clearly recognizable logo,
+branded product packaging, distinctive copyrighted artwork, or a
+specific, identifiable piece of private architecture/property is in focus
+and central to the frame — not just incidentally visible in the
+background at a scale where it isn't legible or recognizable.
 
 Return JSON only."""
 
@@ -260,6 +316,36 @@ def compute_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def compute_phash(path: Path) -> Optional[str]:
+    """Perceptual hash for near-duplicate detection (burst shots, slight
+    crops/recompressions). Returns None rather than raising — this is a
+    nice-to-have signal, never worth breaking the run over."""
+    try:
+        with Image.open(path) as img:
+            return str(imagehash.phash(img))
+    except Exception:
+        return None
+
+
+def find_near_duplicate(phash_hex: Optional[str], seen_phashes: Dict[str, str],
+                         threshold: int = DUPLICATE_HASH_THRESHOLD) -> Optional[str]:
+    """Returns the filename of a visually-similar image already seen this run,
+    or None. Never moves or rejects anything by itself — just a signal."""
+    if not phash_hex:
+        return None
+    try:
+        this_hash = imagehash.hex_to_hash(phash_hex)
+    except Exception:
+        return None
+    for other_name, other_hex in seen_phashes.items():
+        try:
+            if (this_hash - imagehash.hex_to_hash(other_hex)) <= threshold:
+                return other_name
+        except Exception:
+            continue
+    return None
+
+
 def check_exiftool() -> bool:
     try:
         subprocess.run([EXIFTOOL, "-ver"], capture_output=True, text=True, check=True)
@@ -321,8 +407,56 @@ def validate_response(data: dict):
         raise ValueError("Model returned no usable keywords")
 
 
-def call_gemini(client, image_bytes: bytes, max_retries: int = 3) -> dict:
-    last_err = None
+def clean_keywords(keywords: List[str], max_keywords: int = 50) -> List[str]:
+    """Dedupes (case-insensitive), drops crude singular/plural repeats, and
+    hard-caps the list. Conservative on purpose: worst case it leaves a
+    harmless near-duplicate in, it never silently invents or drops a
+    keyword that doesn't look like a repeat."""
+    seen: set = set()
+    cleaned: List[str] = []
+    for kw in keywords:
+        kw = str(kw).strip()
+        if len(kw) < 2:
+            continue
+        key = kw.lower()
+        if key in seen:
+            continue
+        singular_guess = key[:-1] if key.endswith("s") and len(key) > 3 else None
+        plural_guess = key + "s"
+        if (singular_guess and singular_guess in seen) or plural_guess in seen:
+            continue
+        seen.add(key)
+        cleaned.append(kw)
+    return cleaned[:max_keywords]
+
+
+def parse_retry_seconds(message: str) -> Optional[float]:
+    """Pulls Google's own suggested wait time out of the error text when
+    it's there, instead of guessing blind."""
+    m = re.search(r"retry in ([\d.]+)\s*s", message, re.IGNORECASE)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"retrydelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)\s*s", message, re.IGNORECASE)
+    if m:
+        return float(m.group(1))
+    return None
+
+
+def call_gemini(client, image_bytes: bytes, stats: Dict[str, int],
+                 max_retries: int = 5) -> dict:
+    """
+    Calls Gemini with error-aware backoff:
+      - daily quota gone (RESOURCE_EXHAUSTED + "PerDay") -> raises
+        DailyQuotaExhausted immediately, no point retrying or blaming the photo
+      - short rate-limit burst (RESOURCE_EXHAUSTED, no "PerDay") -> wait out
+        Google's suggested delay (or a growing fallback) and retry
+      - 503 / UNAVAILABLE / overloaded -> transient server overload, usually
+        clears up; retry with exponential backoff + jitter
+      - anything else -> short flat backoff and retry
+    `stats` is a shared dict the caller can inspect afterward for reporting
+    (e.g. stats["retries"] += 1 each time we wait and try again).
+    """
+    last_err: Optional[Exception] = None
     for attempt in range(1, max_retries + 1):
         try:
             resp = client.models.generate_content(
@@ -343,13 +477,30 @@ def call_gemini(client, image_bytes: bytes, max_retries: int = 3) -> dict:
             return data
         except Exception as e:
             last_err = e
+            msg = str(e)
+            msg_compact = msg.lower().replace(" ", "")
+
+            if "resource_exhausted" in msg.lower() or " 429" in msg or "'code': 429" in msg:
+                if "perday" in msg_compact or "requestsperday" in msg_compact:
+                    raise DailyQuotaExhausted(msg) from e
+                wait = parse_retry_seconds(msg) or (15 * attempt)
+                wait += random.uniform(0, 3)
+                kind = "rate limit"
+            elif "503" in msg or "unavailable" in msg.lower() or "overloaded" in msg.lower():
+                wait = parse_retry_seconds(msg) or min(10 * (2 ** (attempt - 1)), 90)
+                wait += random.uniform(0, 5)
+                kind = "server overload"
+            else:
+                wait = 3 * attempt
+                kind = "error"
+
+            stats["retries"] = stats.get("retries", 0) + 1
             if attempt == max_retries:
                 break
-            msg = str(e).lower()
-            is_rate_limit = any(t in msg for t in ("429", "resource_exhausted", "rate limit", "quota"))
-            wait = 15 * attempt if is_rate_limit else 3 * attempt
-            print(f" retry {attempt}/{max_retries} in {wait}s ({e})", end=" ... ", flush=True)
+            print(f" retry {attempt}/{max_retries} in {wait:.0f}s ({kind}: {msg[:90]})",
+                  end=" ... ", flush=True)
             time.sleep(wait)
+    stats["failures"] = stats.get("failures", 0) + 1
     raise last_err
 
 
@@ -393,14 +544,30 @@ def short_review_reason(data: dict) -> str:
     return reason
 
 
-def choose_status(score: int, risk: str, people_visible: bool, property_visible: bool) -> str:
-    if people_visible or property_visible:
-        return STATUS_NEEDS_RELEASE
+def choose_status(score, risk, people_visible, property_visible):
     if score < MIN_SCORE:
         return STATUS_LOWQUALITY
+    if people_visible or property_visible:
+        return STATUS_NEEDS_RELEASE
     if risk in {"Medium", "High"}:
         return STATUS_REVIEW
     return STATUS_READY
+
+
+def explain_status(status: str, score: int, risk: str, model_reason: str) -> str:
+    """Every classification gets a real explanation, even when the model's
+    own rejection_reason came back blank — so nothing lands in a folder
+    with no clue why."""
+    model_reason = (model_reason or "").strip()
+    if status == STATUS_READY:
+        return model_reason or f"Meets the quality bar (score {score}/100, risk {risk})."
+    if status == STATUS_LOWQUALITY:
+        return model_reason or f"Commercial score {score}/100 is below the {MIN_SCORE} threshold."
+    if status == STATUS_NEEDS_RELEASE:
+        return model_reason or "Recognizable person or property detected — needs a release before commercial use."
+    if status == STATUS_REVIEW:
+        return model_reason or f"Elevated rejection risk ({risk}) — model didn't give a specific reason, check manually."
+    return model_reason
 
 # ──────────────────────────── REPORTING ───────────────────────────────────
 
@@ -437,6 +604,21 @@ def write_report(report_dir: Path, records: list[dict], summary: dict):
 # ──────────────────────────── MAIN ────────────────────────────────────────
 
 def main():
+    start_time = time.time()
+    exiftool_ok = check_exiftool()
+    api_key = os.environ.get("GEMINI_API_KEY")
+
+    print("=" * 60)
+    print(f"StockFlow v{VERSION}")
+    print(f"Model               : {MODEL}")
+    print(f"Batch size          : {BATCH_LIMIT}")
+    print(f"Pause between calls : {PAUSE_SECONDS}s")
+    print(f"Quality threshold   : {MIN_SCORE}/100")
+    print(f"Resolution minimum  : {MIN_MEGAPIXELS}MP")
+    print(f"ExifTool            : {'OK (' + EXIFTOOL + ')' if exiftool_ok else 'NOT FOUND'}")
+    print(f"GEMINI_API_KEY      : {'set' if api_key else 'MISSING'}")
+    print("=" * 60)
+
     if len(sys.argv) < 2:
         print('Usage:  python stockflow.py "D:\\Photos\\batch_01"')
         sys.exit(1)
@@ -448,12 +630,11 @@ def main():
 
     ensure_output_dirs(folder)
 
-    if not check_exiftool():
+    if not exiftool_ok:
         print(f"\nCan't run exiftool ({EXIFTOOL}).")
         print("Put exiftool.exe in the same folder as this script, or make sure 'exiftool' is on your PATH.")
         sys.exit(1)
 
-    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         print("\nGEMINI_API_KEY not found.")
         print('Run this in PowerShell:  setx GEMINI_API_KEY "your-key-here"')
@@ -490,8 +671,11 @@ def main():
     print(f"Skipping anything scored below {MIN_SCORE}/100 or under {MIN_MEGAPIXELS}MP.\n")
     print(f"Output folders will be created under: {folder}\n")
 
-    seen_hashes: dict[str, str] = {}
-    records: list[dict] = []
+    seen_hashes: Dict[str, str] = {}
+    seen_phashes: Dict[str, str] = {}
+    records: List[dict] = []
+    api_stats: Dict[str, int] = {"retries": 0, "failures": 0}
+    daily_quota_stopped = False
 
     counts = {
         STATUS_READY: 0,
@@ -504,12 +688,13 @@ def main():
         STATUS_ERROR_PERMANENT: 0,
     }
 
+    processed_count = 0
+
     for i, path in enumerate(batch, 1):
         print(f"[{i}/{len(batch)}] {path.name}", end=" ... ", flush=True)
         names = {path.name}
         work_path = path
         prepared = False
-        temp_created = False
         file_hash = None
 
         try:
@@ -525,16 +710,29 @@ def main():
                     "final_name": dup_final.name,
                     "status": STATUS_DUPLICATE,
                     "destination": FOLDER_DUPLICATES,
+                    "reason": f"Byte-identical to {seen_hashes[file_hash]}.",
                     "hash": file_hash,
                     "duplicate_of": seen_hashes[file_hash],
                 })
+                processed_count += 1
                 continue
 
             seen_hashes[file_hash] = path.name
 
+            # near-duplicate flag is purely informational — never moves or
+            # rejects anything, since visually similar shots (different
+            # poses in a burst, slightly different crop) are often still
+            # independently worth submitting
+            phash = compute_phash(path)
+            near_dupe_of = find_near_duplicate(phash, seen_phashes)
+            if phash:
+                seen_phashes[path.name] = phash
+            if near_dupe_of:
+                log(review_log, f"NOTE  {path.name}  visually similar to {near_dupe_of} — "
+                                 f"check whether you need both before uploading")
+
             work_path = normalize_image(path, work_dir)
             prepared = work_path != path
-            temp_created = prepared
             if prepared:
                 print(f"(prepared as {work_path.name}) ", end="", flush=True)
                 log(review_log, f"NOTE  {path.name}  auto-prepared for upload -> {work_path.name}")
@@ -554,17 +752,19 @@ def main():
                     "final_name": dest.name,
                     "status": STATUS_LOWRES,
                     "destination": FOLDER_LOWRES,
+                    "reason": f"{mp:.1f}MP is below the {MIN_MEGAPIXELS}MP minimum.",
                     "megapixels": round(mp, 2),
                     "hash": file_hash,
                 })
+                processed_count += 1
                 continue
 
             img_bytes = resize_for_api(work_path)
-            data = call_gemini(client, img_bytes)
+            data = call_gemini(client, img_bytes, api_stats)
 
             score = int(data.get("commercial_score", 0))
             risk = str(data.get("rejection_risk", "Unknown")).strip()
-            reason = short_review_reason(data)
+            model_reason = short_review_reason(data)
             people_visible = bool(data.get("people_visible", False))
             property_visible = bool(data.get("property_or_trademark_visible", False))
             category = str(data.get("category", "")).strip()
@@ -577,10 +777,11 @@ def main():
                 category2 = ""
 
             status = choose_status(score, risk, people_visible, property_visible)
+            reason = explain_status(status, score, risk, model_reason)
 
-            # store a human-readable explanation in the review log for anything not READY
-            if status in {STATUS_NEEDS_RELEASE, STATUS_REVIEW, STATUS_LOWQUALITY} and reason:
-                log(review_log, f"{status}  {path.name}  {reason}")
+            # every non-READY classification always gets a logged, readable reason now
+            if status != STATUS_READY:
+                log(review_log, f"{status}  {path.name}  score={score}  risk={risk}  {reason}")
             if status == STATUS_NEEDS_RELEASE:
                 if people_visible:
                     log(review_log, f"FLAG  {path.name}  PEOPLE — model release needed")
@@ -589,7 +790,7 @@ def main():
 
             title = str(data["title"]).strip()
             description = str(data["description"]).strip()
-            keywords = [k.strip() for k in data["keywords"] if str(k).strip()]
+            keywords = clean_keywords([k for k in data["keywords"] if str(k).strip()])
 
             final_name = rename_from_title(title, path, status)
             destination_dir = {
@@ -633,6 +834,7 @@ def main():
             )
 
             counts[status] += 1
+            processed_count += 1
 
             records.append({
                 "original_name": path.name,
@@ -648,6 +850,7 @@ def main():
                 "people_visible": people_visible,
                 "property_or_trademark_visible": property_visible,
                 "hash": file_hash,
+                "keyword_count": len(keywords),
             })
 
             if status == STATUS_READY:
@@ -661,6 +864,16 @@ def main():
             else:
                 print(f"{status}  score={score}/100  risk={risk}")
 
+        except DailyQuotaExhausted as e:
+            daily_quota_stopped = True
+            print("\n\nDaily Gemini quota reached — stopping here, not blaming this photo.")
+            log(review_log, f"DAILY QUOTA EXHAUSTED  stopped at {path.name}  {e}")
+            print(f"'{path.name}' and everything after it in this run is still marked")
+            print("pending — nothing is lost. Free tier resets at midnight Pacific Time")
+            print("(roughly 12:30 PM IST). Just run StockFlow again after that, or switch")
+            print("MODEL to a less-restricted tier if you have one available.\n")
+            break
+
         except Exception as e:
             attempts = registry.get(path.name, {}).get("attempts", 0) + 1
             status = STATUS_ERROR if attempts < MAX_ATTEMPTS else STATUS_ERROR_PERMANENT
@@ -668,18 +881,32 @@ def main():
             log(review_log, f"ERROR  {path.name}  attempt={attempts}  {e}")
             mark_registry(folder, registry, names, status, attempts=attempts, last_error=str(e)[:300], hash=file_hash)
             counts[status] += 1
+            processed_count += 1
             records.append({
                 "original_name": path.name,
                 "final_name": "",
                 "status": status,
+                "reason": f"Failed after {attempts} attempt(s): {e}",
                 "error": str(e),
                 "hash": file_hash,
             })
 
         time.sleep(PAUSE_SECONDS)
 
+    ready_records = [r for r in records if r.get("status") == STATUS_READY]
+    scored_records = [r for r in records if isinstance(r.get("score"), int)]
+    category_counts = Counter(r["category"] for r in ready_records if r.get("category"))
+
+    duration_seconds = round(time.time() - start_time, 1)
+    avg_score = round(sum(r["score"] for r in scored_records) / len(scored_records), 1) if scored_records else None
+    avg_keywords = round(sum(r["keyword_count"] for r in ready_records) / len(ready_records), 1) if ready_records else None
+    low_risk_ready = sum(1 for r in ready_records if r.get("risk") == "Low")
+    acceptance_estimate = round(100 * low_risk_ready / len(ready_records), 1) if ready_records else None
+
     summary = {
-        "processed_this_run": len(batch),
+        "version": VERSION,
+        "model": MODEL,
+        "processed_this_run": processed_count,
         "ready_to_upload": counts[STATUS_READY],
         "low_res": counts[STATUS_LOWRES],
         "low_quality": counts[STATUS_LOWQUALITY],
@@ -687,14 +914,22 @@ def main():
         "needs_release": counts[STATUS_NEEDS_RELEASE],
         "review": counts[STATUS_REVIEW],
         "errors": counts[STATUS_ERROR] + counts[STATUS_ERROR_PERMANENT],
-        "remaining": len(all_images) - len(batch),
+        "remaining": len(all_images) - processed_count,
         "folder": str(folder),
+        "duration_seconds": duration_seconds,
+        "average_commercial_score": avg_score,
+        "average_keyword_count": avg_keywords,
+        "category_distribution": dict(category_counts),
+        "api_retries": api_stats.get("retries", 0),
+        "api_hard_failures": api_stats.get("failures", 0),
+        "rough_acceptance_estimate_percent": acceptance_estimate,
+        "stopped_on_daily_quota": daily_quota_stopped,
     }
 
     write_report(report_dir, records, summary)
 
     print(f"\n── Done ─────────────────────────────────────────")
-    print(f"   Processed this run    : {len(batch)}")
+    print(f"   Processed this run    : {processed_count}")
     print(f"   Ready to upload       : {counts[STATUS_READY]}")
     print(f"   Low resolution        : {counts[STATUS_LOWRES]}")
     print(f"   Low quality           : {counts[STATUS_LOWQUALITY]}")
@@ -703,6 +938,14 @@ def main():
     print(f"   Review                : {counts[STATUS_REVIEW]}")
     print(f"   Errors                : {counts[STATUS_ERROR] + counts[STATUS_ERROR_PERMANENT]}")
     print(f"   Still pending         : {summary['remaining']} (run again to continue)")
+    if avg_score is not None:
+        print(f"   Average score         : {avg_score}/100")
+    if avg_keywords is not None:
+        print(f"   Average keyword count : {avg_keywords}")
+    if acceptance_estimate is not None:
+        print(f"   Rough acceptance est. : {acceptance_estimate}% (Low-risk share of Ready — a rough guide, not a guarantee)")
+    print(f"   Duration              : {duration_seconds}s")
+    print(f"   API retries / failures: {api_stats.get('retries', 0)} / {api_stats.get('failures', 0)}")
     print(f"   CSV ready at          : {csv_path}")
     print(f"   Report JSON           : {report_dir / 'report.json'}")
     print(f"   Report CSV            : {report_dir / 'report.csv'}")
