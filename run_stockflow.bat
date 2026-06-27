@@ -18,7 +18,7 @@ echo.
 echo Running pipeline on: %FOLDER%
 echo.
 
-python stock_pipeline_v3.py "%FOLDER%"
+python stockflow.py "%FOLDER%"
 
 echo.
 echo ============================================================

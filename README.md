@@ -11,16 +11,22 @@ Instead of manually writing titles, descriptions, and keywords for every image, 
 
 ## What StockFlow Does
 
-- 🤖 Generate commercial stock metadata
-- 📝 Create SEO-oriented titles, descriptions, and keywords
-- 🏷️ Embed EXIF, IPTC, and XMP metadata
-- 🖼️ Prepare upload-ready images automatically
-- 📄 Generate Shutterstock-compatible CSV files
-- 📂 Batch process entire photo folders
-- ⚠️ Detect potential model and property release requirements
-- 📏 Validate image resolution and supported formats
-- 🔄 Retry temporary API failures automatically
-- 📊 Produce quality scores and review logs
+* 🤖 AI-powered commercial metadata generation using Gemini Vision
+* 📝 SEO-oriented stock titles, descriptions, and keyword generation
+* 🏷️ EXIF, IPTC, and XMP metadata embedding
+* 📦 Batch processing for entire photo collections
+* 📄 Shutterstock CSV export
+* 🖼️ Adobe Stock compatible metadata
+* 🔄 Automatic PNG → JPEG conversion
+* 📏 Resolution validation and upload preparation
+* 📁 Automatic workflow folder organization
+* 🔍 Exact duplicate detection (SHA-256)
+* 👁️ Near-duplicate detection using perceptual hashing (pHash)
+* ⚠️ Improved model/property release detection
+* 🛡️ Anti-hallucination metadata generation
+* 📊 JSON and CSV processing reports
+* 📈 Runtime diagnostics and processing statistics
+* 🔁 Intelligent retry handling for Gemini API rate limits and server overload
 
 ---
 
