@@ -1,6 +1,6 @@
 
 """
-StockFlow v4.1
+StockFlow v4.2.0
 =============
 AI-powered workflow for preparing stock photography for Shutterstock,
 Adobe Stock, and other stock marketplaces.
@@ -58,7 +58,7 @@ MAX_FILE_SIZE_MB = 50
 MAX_ATTEMPTS     = 3
 IMAGE_TYPES      = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 DUPLICATE_HASH_THRESHOLD = 6   # perceptual-hash Hamming distance (0-64); lower = stricter
-VERSION = "4.1.0"
+VERSION = "4.2.0"
 
 
 class DailyQuotaExhausted(Exception):
@@ -137,7 +137,8 @@ Analyze the attached image and return ONLY valid JSON with exactly these keys
   "rejection_risk": "",
   "rejection_reason": "",
   "people_visible": false,
-  "property_or_trademark_visible": false
+  "property_or_trademark_visible": false,
+  "watermark_or_overlay_visible": false
 }
 
 ANTI-HALLUCINATION RULE (applies to every field below): only describe what
@@ -210,10 +211,21 @@ negatives here cause real legal exposure for the contributor, so err
 toward caution, but don't flag things that obviously aren't people.
 
 PROPERTY_OR_TRADEMARK_VISIBLE: true ONLY if a clearly recognizable logo,
-branded product packaging, distinctive copyrighted artwork, or a
-specific, identifiable piece of private architecture/property is in focus
-and central to the frame — not just incidentally visible in the
-background at a scale where it isn't legible or recognizable.
+branded product packaging, distinctive copyrighted artwork, or a specific,
+identifiable piece of private architecture/building is in focus and
+central to the frame — not just incidentally visible in the background at
+a scale where it isn't legible or recognizable. This field is about
+intellectual property and identifiable buildings ONLY. Do NOT set this
+true for plants, flowers, insects, animals, generic landscapes, or any
+other natural subject — nature is never "property" in this sense, no
+matter where it was photographed.
+
+WATERMARK_OR_OVERLAY_VISIBLE: true if there is ANY visible watermark,
+photographer's logo stamp, social media handle, website URL, copyright
+notice, or burned-in text overlay anywhere in the frame — including
+small, faint, or corner-placed ones. This is checked carefully because
+every marketplace auto-rejects on sight for this; it is never acceptable
+on a commercial submission regardless of how good the photo is otherwise.
 
 Return JSON only."""
 
@@ -239,7 +251,9 @@ def load_registry(folder: Path) -> dict:
 
 def save_registry(folder: Path, registry: dict):
     path = folder / ".pipeline_registry.json"
-    path.write_text(json.dumps(registry, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp_path, path)  # atomic on both Windows and POSIX — no half-written file possible
 
 
 def mark_registry(folder: Path, registry: dict, names: Iterable[str], status: str, **extra):
@@ -371,7 +385,7 @@ def normalize_image(path: Path, work_dir: Path) -> Path:
         return path
 
     ensure_dir(work_dir)
-    out_path = work_dir / f"{path.stem}_ready.jpg"
+    out_path = safe_unique_path(work_dir, f"{path.stem}_ready.jpg")
 
     img = Image.open(path).convert("RGB")
     quality = 92
@@ -474,6 +488,7 @@ def call_gemini(client, image_bytes: bytes, stats: Dict[str, int],
             data.setdefault("rejection_reason", "")
             data.setdefault("people_visible", False)
             data.setdefault("property_or_trademark_visible", False)
+            data.setdefault("watermark_or_overlay_visible", False)
             return data
         except Exception as e:
             last_err = e
@@ -544,7 +559,9 @@ def short_review_reason(data: dict) -> str:
     return reason
 
 
-def choose_status(score, risk, people_visible, property_visible):
+def choose_status(score, risk, people_visible, property_visible, watermark_visible=False):
+    if watermark_visible:
+        return STATUS_LOWQUALITY
     if score < MIN_SCORE:
         return STATUS_LOWQUALITY
     if people_visible or property_visible:
@@ -554,11 +571,14 @@ def choose_status(score, risk, people_visible, property_visible):
     return STATUS_READY
 
 
-def explain_status(status: str, score: int, risk: str, model_reason: str) -> str:
+def explain_status(status: str, score: int, risk: str, model_reason: str,
+                    watermark_visible: bool = False) -> str:
     """Every classification gets a real explanation, even when the model's
     own rejection_reason came back blank — so nothing lands in a folder
     with no clue why."""
     model_reason = (model_reason or "").strip()
+    if watermark_visible and status == STATUS_LOWQUALITY:
+        return model_reason or "Visible watermark, logo stamp, or text overlay baked into the image — not sellable as-is."
     if status == STATUS_READY:
         return model_reason or f"Meets the quality bar (score {score}/100, risk {risk})."
     if status == STATUS_LOWQUALITY:
@@ -583,7 +603,8 @@ def write_report(report_dir: Path, records: list[dict], summary: dict):
         writer.writerow([
             "original_name", "final_name", "status", "score", "risk", "category",
             "category2", "title", "destination", "reason", "people_visible",
-            "property_or_trademark_visible"
+            "property_or_trademark_visible", "watermark_or_overlay_visible",
+            "keyword_count",
         ])
         for r in records:
             writer.writerow([
@@ -599,6 +620,8 @@ def write_report(report_dir: Path, records: list[dict], summary: dict):
                 r.get("reason", ""),
                 r.get("people_visible", False),
                 r.get("property_or_trademark_visible", False),
+                r.get("watermark_or_overlay_visible", False),
+                r.get("keyword_count", ""),
             ])
 
 # ──────────────────────────── MAIN ────────────────────────────────────────
@@ -767,6 +790,7 @@ def main():
             model_reason = short_review_reason(data)
             people_visible = bool(data.get("people_visible", False))
             property_visible = bool(data.get("property_or_trademark_visible", False))
+            watermark_visible = bool(data.get("watermark_or_overlay_visible", False))
             category = str(data.get("category", "")).strip()
             category2 = str(data.get("category2", "")).strip()
 
@@ -776,8 +800,8 @@ def main():
             if category2 and (category2 not in SHUTTERSTOCK_CATEGORIES or category2 == category):
                 category2 = ""
 
-            status = choose_status(score, risk, people_visible, property_visible)
-            reason = explain_status(status, score, risk, model_reason)
+            status = choose_status(score, risk, people_visible, property_visible, watermark_visible)
+            reason = explain_status(status, score, risk, model_reason, watermark_visible)
 
             # every non-READY classification always gets a logged, readable reason now
             if status != STATUS_READY:
@@ -787,6 +811,8 @@ def main():
                     log(review_log, f"FLAG  {path.name}  PEOPLE — model release needed")
                 if property_visible:
                     log(review_log, f"FLAG  {path.name}  PROPERTY/TRADEMARK — release may be needed")
+            if watermark_visible:
+                log(review_log, f"FLAG  {path.name}  WATERMARK/OVERLAY — flagged, sent to {status}")
 
             title = str(data["title"]).strip()
             description = str(data["description"]).strip()
@@ -831,6 +857,7 @@ def main():
                 hash=file_hash,
                 people_visible=people_visible,
                 property_or_trademark_visible=property_visible,
+                watermark_or_overlay_visible=watermark_visible,
             )
 
             counts[status] += 1
@@ -849,6 +876,7 @@ def main():
                 "reason": reason,
                 "people_visible": people_visible,
                 "property_or_trademark_visible": property_visible,
+                "watermark_or_overlay_visible": watermark_visible,
                 "hash": file_hash,
                 "keyword_count": len(keywords),
             })
@@ -894,6 +922,7 @@ def main():
         time.sleep(PAUSE_SECONDS)
 
     ready_records = [r for r in records if r.get("status") == STATUS_READY]
+    truly_remaining = sum(1 for p in all_images if is_pending(p.name, registry))
     scored_records = [r for r in records if isinstance(r.get("score"), int)]
     category_counts = Counter(r["category"] for r in ready_records if r.get("category"))
 
@@ -901,7 +930,7 @@ def main():
     avg_score = round(sum(r["score"] for r in scored_records) / len(scored_records), 1) if scored_records else None
     avg_keywords = round(sum(r["keyword_count"] for r in ready_records) / len(ready_records), 1) if ready_records else None
     low_risk_ready = sum(1 for r in ready_records if r.get("risk") == "Low")
-    acceptance_estimate = round(100 * low_risk_ready / len(ready_records), 1) if ready_records else None
+    low_risk_ready_ratio_percent = round(100 * low_risk_ready / len(ready_records), 1) if ready_records else None
 
     summary = {
         "version": VERSION,
@@ -914,7 +943,7 @@ def main():
         "needs_release": counts[STATUS_NEEDS_RELEASE],
         "review": counts[STATUS_REVIEW],
         "errors": counts[STATUS_ERROR] + counts[STATUS_ERROR_PERMANENT],
-        "remaining": len(all_images) - processed_count,
+        "remaining": truly_remaining,
         "folder": str(folder),
         "duration_seconds": duration_seconds,
         "average_commercial_score": avg_score,
@@ -922,7 +951,7 @@ def main():
         "category_distribution": dict(category_counts),
         "api_retries": api_stats.get("retries", 0),
         "api_hard_failures": api_stats.get("failures", 0),
-        "rough_acceptance_estimate_percent": acceptance_estimate,
+        "low_risk_ready_ratio_percent": low_risk_ready_ratio_percent,
         "stopped_on_daily_quota": daily_quota_stopped,
     }
 
@@ -942,8 +971,8 @@ def main():
         print(f"   Average score         : {avg_score}/100")
     if avg_keywords is not None:
         print(f"   Average keyword count : {avg_keywords}")
-    if acceptance_estimate is not None:
-        print(f"   Rough acceptance est. : {acceptance_estimate}% (Low-risk share of Ready — a rough guide, not a guarantee)")
+    if low_risk_ready_ratio_percent is not None:
+        print(f"   Low-risk share of Ready: {low_risk_ready_ratio_percent}% (not an acceptance guarantee — Shutterstock's reviewers make the real call)")
     print(f"   Duration              : {duration_seconds}s")
     print(f"   API retries / failures: {api_stats.get('retries', 0)} / {api_stats.get('failures', 0)}")
     print(f"   CSV ready at          : {csv_path}")
