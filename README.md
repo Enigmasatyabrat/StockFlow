@@ -1,32 +1,30 @@
 # StockFlow
 
-**AI-powered workflow for preparing stock photography for Shutterstock, Adobe Stock, and other stock marketplaces.**
+**Automate metadata generation, image preparation, and stock submission workflows.**
 
-StockFlow automates one of the most repetitive parts of stock photography: generating metadata, embedding it into image files, preparing upload-ready images, and creating Shutterstock-compatible CSV files.
-
-Instead of manually writing titles, descriptions, and keywords for every image, StockFlow uses Google's Gemini Vision models to analyze photos and generate commercially focused metadata.
+StockFlow reduces the repetitive work of preparing stock photography for marketplaces like Shutterstock and Adobe Stock. It analyzes photos, generates commercial metadata, embeds it into the image files, prepares upload-ready copies, and creates Shutterstock-compatible CSV output.
 
 ---
 
-
 ## What StockFlow Does
 
-* 🤖 AI-powered commercial metadata generation using Gemini Vision
-* 📝 SEO-oriented stock titles, descriptions, and keyword generation
-* 🏷️ EXIF, IPTC, and XMP metadata embedding
-* 📦 Batch processing for entire photo collections
-* 📄 Shutterstock CSV export
-* 🖼️ Adobe Stock compatible metadata
-* 🔄 Automatic PNG → JPEG conversion
-* 📏 Resolution validation and upload preparation
-* 📁 Automatic workflow folder organization
-* 🔍 Exact duplicate detection (SHA-256)
-* 👁️ Near-duplicate detection using perceptual hashing (pHash)
-* ⚠️ Improved model/property release detection
-* 🛡️ Anti-hallucination metadata generation
-* 📊 JSON and CSV processing reports
-* 📈 Runtime diagnostics and processing statistics
-* 🔁 Intelligent retry handling for Gemini API rate limits and server overload
+* Generate commercial stock metadata with Gemini Vision
+* Create SEO-oriented titles, descriptions, and keywords
+* Embed EXIF, IPTC, and XMP metadata
+* Batch process entire photo collections
+* Export Shutterstock-compatible CSV files
+* Support Adobe Stock-compatible embedded metadata
+* Convert PNG files to JPEG automatically
+* Prepare oversized images for upload
+* Validate resolution before processing
+* Organize files into workflow folders automatically
+* Detect exact duplicates using SHA-256
+* Flag near-duplicates using perceptual hashing (pHash)
+* Improve model and property release detection
+* Reduce hallucinated metadata with stronger prompt rules
+* Produce JSON and CSV processing reports
+* Show runtime diagnostics and processing statistics
+* Retry Gemini API calls intelligently during temporary failures
 
 ---
 
@@ -57,10 +55,10 @@ Upload
 ## Requirements
 
 * Python 3.11+
-* Google Gemini API Key
+* Google Gemini API key
 * ExifTool
 
-Python dependencies:
+Install Python dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -88,7 +86,7 @@ Set your API key:
 setx GEMINI_API_KEY "YOUR_API_KEY"
 ```
 
-Restart your terminal.
+Restart your terminal after setting it.
 
 ---
 
@@ -98,11 +96,11 @@ Restart your terminal.
 
 Double-click:
 
-```
+```text
 run_stockflow.bat
 ```
 
-or
+Or run manually:
 
 ```bash
 python stockflow.py "D:\Photos\Batch1"
@@ -112,18 +110,20 @@ python stockflow.py "D:\Photos\Batch1"
 
 ## Output
 
-The pipeline generates:
+StockFlow generates:
 
 * `shutterstock_upload.csv`
 * `needs_review.txt`
+* `report.json`
+* `report.csv`
 
-and embeds metadata directly into supported image files.
+It also embeds metadata directly into supported image files.
 
 ---
 
 ## Roadmap
 
-* Duplicate image detection
+* Duplicate image similarity improvements
 * Blur detection
 * Noise analysis
 * Portfolio database
@@ -147,4 +147,3 @@ Satyabrat Mishra
 ## Disclaimer
 
 StockFlow assists with metadata generation and workflow automation. Contributors remain responsible for verifying metadata accuracy and complying with the submission requirements of each stock marketplace, including model releases, property releases, and intellectual property restrictions.
-
