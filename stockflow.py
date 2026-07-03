@@ -1,6 +1,6 @@
 
 """
-StockFlow v4.2.0
+StockFlow v4.2.1
 =============
 AI-powered workflow for preparing stock photography for Shutterstock,
 Adobe Stock, and other stock marketplaces.
@@ -45,7 +45,15 @@ import imagehash
 from google import genai
 from google.genai import types
 from PIL import Image, ImageFilter
+from PIL import ImageFile
+import warnings
 
+# Allow legitimate ultra-high-resolution images
+Image.MAX_IMAGE_PIXELS = 500_000_000
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# Suppress decompression bomb warnings for images under our limit
+warnings.simplefilter("ignore", Image.DecompressionBombWarning)
 # ──────────────────────────── SETTINGS ────────────────────────────────────
 SCRIPT_DIR       = Path(__file__).resolve().parent
 MODEL            = "gemini-2.5-flash-lite"
