@@ -56,7 +56,11 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 warnings.simplefilter("ignore", Image.DecompressionBombWarning)
 # ──────────────────────────── SETTINGS ────────────────────────────────────
 SCRIPT_DIR       = Path(__file__).resolve().parent
-MODEL            = "gemini-2.5-flash-lite"
+MODEL = os.getenv(
+    "GEMINI_MODEL",
+    "gemini-2.5-flash-lite"
+)
+# this will let us switch to a different model in the future without changing the code 
 BATCH_LIMIT      = 50
 PAUSE_SECONDS    = 4
 MIN_SCORE        = 60
@@ -66,7 +70,7 @@ MAX_FILE_SIZE_MB = 50
 MAX_ATTEMPTS     = 3
 IMAGE_TYPES      = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 DUPLICATE_HASH_THRESHOLD = 6   # perceptual-hash Hamming distance (0-64); lower = stricter
-VERSION = "4.2.0"
+VERSION = "4.2.1"
 
 
 class DailyQuotaExhausted(Exception):
