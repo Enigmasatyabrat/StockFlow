@@ -2,9 +2,17 @@
 exiftool.exe
 exiftool_files/
 
-# Python cache
+# Python cache / build
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
 
 # Local environment
 .env
@@ -14,8 +22,9 @@ __pycache__/
 Thumbs.db
 .DS_Store
 
-# VS Code settings (optional)
-.vscode/settings.json
+# VS Code -- settings.json is committed so the test runner config is shared.
+.vscode/*
+!.vscode/settings.json
 
 # Processing outputs
 Reports/
@@ -26,3 +35,13 @@ Reports/
 04_DUPLICATES/
 05_NEEDS_RELEASE/
 06_REVIEW/
+07_ERRORS/
+.stockflow_work/
+.pipeline_registry.json
+.pipeline_registry.json.*
+.stockflow_quota.json
+
+# Scratch dirs used while developing
+.e2e*/
+.audit/
+.tmp_probe/

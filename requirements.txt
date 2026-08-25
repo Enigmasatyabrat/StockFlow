@@ -1,2 +1,21 @@
-google-genai
-Pillow
+# Runtime dependencies.
+#
+# v4's requirements.txt listed only google-genai and Pillow while the code
+# already imported imagehash, so a clean `pip install -r requirements.txt`
+# crashed on import. Everything the code actually imports is now listed.
+#
+# Prefer:  pip install -e .          (or  pip install -e ".[raw]"  for RAW)
+
+google-genai>=2.10,<3
+Pillow>=10.0
+ImageHash>=4.3
+numpy>=1.24
+pillow-heif>=0.15
+
+# Windows ships no system timezone database; needed for the Pacific-midnight
+# daily-quota rollover.
+tzdata>=2024.1; sys_platform == "win32"
+
+# Optional -- RAW decoding (CR2/NEF/ARW/DNG/ORF/RAF/RW2).
+# StockFlow runs without it and reports RAW support as off.
+# rawpy>=0.19

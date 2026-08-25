@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stockflow"
+version = "5.0.0"
+description = "AI-assisted preparation of stock photography for Shutterstock, Adobe Stock and other marketplaces."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Satyabrat Mishra" }]
+keywords = ["stock-photography", "shutterstock", "adobe-stock", "metadata", "exif", "iptc", "gemini"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics",
+]
+
+# Pinned to compatible ranges rather than left floating: the code depends on
+# specific google-genai surface (types.HttpRetryOptions, response.parsed,
+# APIError.details), so a major bump can break it silently.
+dependencies = [
+    "google-genai>=2.10,<3",
+    "Pillow>=10.0",
+    "ImageHash>=4.3",
+    "numpy>=1.24",
+    "pillow-heif>=0.15",
+    "tzdata>=2024.1; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+# RAW decoding. Separate because rawpy ships platform wheels that can fail to
+# build, and everything else works fine without it.
+raw = ["rawpy>=0.19"]
+dev = ["pytest>=8.0", "pytest-cov>=4.1"]
+all = ["stockflow[raw,dev]"]
+
+[project.scripts]
+stockflow = "stockflow.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Enigmasatyabrat/StockFlow"
+Issues = "https://github.com/Enigmasatyabrat/StockFlow/issues"
+
+# Flat layout with a same-named shim module beside the package confuses
+# setuptools' auto-discovery, so both are declared explicitly.
+[tool.setuptools]
+packages = ["stockflow", "stockflow.imaging"]
+py-modules = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: drives the real exiftool binary; skipped when unavailable",
+    "slow: takes more than a second",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:google.*",
+]
