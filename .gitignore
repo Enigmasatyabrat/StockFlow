@@ -45,3 +45,8 @@ Reports/
 .e2e*/
 .audit/
 .tmp_probe/
+.cal/
+.live/
+.final/
+.verify/
+.livetest/
