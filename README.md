@@ -85,6 +85,25 @@ folder onto it. It previews first and asks before doing anything.
 
 `python stockflow.py FOLDER` and `python -m stockflow FOLDER` both work too.
 
+### Calibrating the quality thresholds
+
+The blur/noise/clipping defaults are derived from the mathematics, not from
+photographs, which is why they reject nothing unless you ask. To get numbers
+from your own work instead:
+
+```bash
+stockflow "D:\Photos\portfolio" --calibrate
+```
+
+Better, if you have both: point it at images you kept and images you rejected,
+and it finds the threshold that actually separates them.
+
+```bash
+stockflow "D:\Photos\kept" --calibrate --against "D:\Photosejected"
+```
+
+No API calls, nothing written, nothing moved.
+
 ### Useful options
 
 ```bash
