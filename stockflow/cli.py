@@ -37,7 +37,7 @@ def make_console_safe() -> None:
             pass
 
 
-def setup_logging(settings: Settings) -> None:
+def setup_logging(settings: Settings, write_file: bool = True) -> None:
     level = logging.DEBUG if settings.verbose else logging.WARNING if settings.quiet else logging.INFO
 
     root = logging.getLogger("stockflow")
@@ -50,7 +50,7 @@ def setup_logging(settings: Settings) -> None:
     console.setFormatter(logging.Formatter("%(message)s"))
     root.addHandler(console)
 
-    if not settings.dry_run:
+    if write_file and not settings.dry_run:
         try:
             settings.reports_dir.mkdir(parents=True, exist_ok=True)
             debug_log = settings.reports_dir / "stockflow.log"
@@ -126,6 +126,18 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("-v", "--verbose", action="store_true", default=None, help="Show debug detail.")
     g.add_argument("-q", "--quiet", action="store_true", default=None, help="Only warnings and errors.")
 
+    g = p.add_argument_group("calibration")
+    g.add_argument("--calibrate", action="store_true", default=None,
+                   help="Measure quality across the folder and report how it distributes, "
+                        "then suggest thresholds. No API calls, no files moved.")
+    g.add_argument("--against", type=Path, metavar="FOLDER",
+                   help="With --calibrate: a second folder of images you rejected. "
+                        "Finds the threshold that best separates the two.")
+    g.add_argument("--cut-percentile", type=int, default=5, metavar="N",
+                   help="With --calibrate: which worst-N%% to suggest cutting (default 5).")
+    g.add_argument("--show-worst", type=int, default=10, metavar="N",
+                   help="With --calibrate: how many worst-scoring images to list (default 10).")
+
     return p
 
 
@@ -181,6 +193,13 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"Configuration problem: {exc}", file=sys.stderr)
         return 2
+
+    # Calibration reads pixels and nothing else -- no exiftool, no API key,
+    # and nothing written, not even a log file. It says so in its banner, so
+    # it must not quietly create a Reports/ directory either.
+    if args.calibrate:
+        setup_logging(settings, write_file=False)
+        return cmd_calibrate(settings, args)
 
     setup_logging(settings)
 
@@ -255,6 +274,59 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     _print_outcome(result, settings)
+    return 0
+
+
+def cmd_calibrate(settings: Settings, args) -> int:
+    """Report how quality measurements distribute across real photographs."""
+    from . import calibrate as cal
+
+    print("=" * 66)
+    print(f"StockFlow v{VERSION}  --  calibration")
+    print(f"  Folder : {settings.folder}")
+    if args.against:
+        print(f"  Against: {args.against}")
+    print("  Reads pixels only. No API calls, no files moved.")
+    print("=" * 66)
+    print()
+
+    kept = cal.measure_folder(
+        settings.folder, settings, limit=args.batch_limit,
+        progress=lambda m: print(m, flush=True),
+    )
+    if not kept:
+        print("\nNo images could be measured in that folder.")
+        return 1
+
+    print()
+    print(cal.describe_distribution(kept, cut_percentile=args.cut_percentile))
+
+    if args.show_worst:
+        print()
+        print(f"Lowest {args.show_worst} by focus -- open these and judge for yourself")
+        print("whether they are genuinely soft. That is the only real check:")
+        print()
+        for m in cal.worst_by_focus(kept, args.show_worst):
+            flags = ", ".join(m.report.flags) or "-"
+            print(f"  focus {m.report.blur_score:>9.1f}  noise {m.report.noise_score:>5.2f}  "
+                  f"[{flags}]  {m.name}")
+
+    if args.against:
+        against = Path(args.against).expanduser().resolve()
+        if not against.is_dir():
+            print(f"\n--against folder not found: {against}", file=sys.stderr)
+            return 2
+        print()
+        print("-" * 66)
+        rejected = cal.measure_folder(
+            against, settings, limit=args.batch_limit,
+            progress=lambda m: print(m, flush=True),
+        )
+        print()
+        print(cal.describe_separation(kept, rejected))
+
+    print()
+    print("Nothing was changed. Add the flags above to a normal run to use them.")
     return 0
 
 

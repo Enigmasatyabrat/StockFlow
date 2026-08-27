@@ -49,6 +49,29 @@ and always reported; nothing is rejected on them unless you opt in.
 | `--config P` | `stockflow.json` in the folder | JSON config file |
 | `-v` / `-q` | — | Verbose / quiet |
 
+### Calibration
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--calibrate` | off | Measure quality across the folder and report how it distributes |
+| `--against FOLDER` | — | A second folder of images you rejected; finds the best separating threshold |
+| `--cut-percentile N` | 5 | Which worst-N% to suggest cutting |
+| `--show-worst N` | 10 | How many worst-scoring images to list |
+
+Calibration reads pixels only. No API key, no exiftool, nothing written --
+not even a log file.
+
+```bash
+stockflow "D:\Photos\portfolio" --calibrate
+stockflow "D:\Photos\kept" --calibrate --against "D:\Photosejected"
+```
+
+The second form is the useful one: give it work you kept and work you binned,
+and it reports which metrics actually separate them and at what cut. When a
+metric does not separate, it says so rather than inventing a confident number
+-- that is a real answer, and it means gating on that metric would reject the
+wrong pictures.
+
 ## Settings precedence
 
 **CLI flag → environment variable → config file → default.**
