@@ -63,7 +63,7 @@ not even a log file.
 
 ```bash
 stockflow "D:\Photos\portfolio" --calibrate
-stockflow "D:\Photos\kept" --calibrate --against "D:\Photosejected"
+stockflow "D:\Photos\kept" --calibrate --against "D:\Photos\rejected"
 ```
 
 The second form is the useful one: give it work you kept and work you binned,
