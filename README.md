@@ -99,7 +99,7 @@ Better, if you have both: point it at images you kept and images you rejected,
 and it finds the threshold that actually separates them.
 
 ```bash
-stockflow "D:\Photos\kept" --calibrate --against "D:\Photosejected"
+stockflow "D:\Photos\kept" --calibrate --against "D:\Photos\rejected"
 ```
 
 No API calls, nothing written, nothing moved.
