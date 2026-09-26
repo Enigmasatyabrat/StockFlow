@@ -206,3 +206,14 @@ class TestDedupeIndex:
 
     def test_none_phash_is_safe(self):
         assert DedupeIndex().near_match(None) is None
+
+
+class TestProviderLimits:
+    def test_local_models_have_no_binding_quota(self):
+        local = limits_mod.for_provider("ollama", "qwen2.5vl:3b")
+        assert local is limits_mod.LOCAL
+        assert local.rpd >= 1_000_000
+
+    def test_gemini_still_uses_model_limits(self):
+        assert limits_mod.for_provider("gemini", "gemini-2.5-flash-lite") == \
+            limits_mod.for_model("gemini-2.5-flash-lite")

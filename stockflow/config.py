@@ -26,6 +26,13 @@ REPO_ROOT = PACKAGE_DIR.parent
 
 DEFAULT_MODEL = "gemini-2.5-flash-lite"
 
+#: Where image analysis runs. "gemini" calls Google's API; "ollama" calls a
+#: vision model served by Ollama -- on this machine or another one reachable
+#: over the network -- and costs nothing per image.
+PROVIDERS = ("gemini", "ollama")
+DEFAULT_OLLAMA_MODEL = "qwen2.5vl:3b"
+DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+
 # Formats PIL handles natively.
 BASE_IMAGE_TYPES = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"})
 HEIF_IMAGE_TYPES = frozenset({".heic", ".heif"})
@@ -42,8 +49,10 @@ class Settings:
     folder: Path
 
     # Model / API
+    provider: str = "gemini"
     model: str = DEFAULT_MODEL
     api_key: str = ""
+    ollama_host: str = DEFAULT_OLLAMA_HOST
     rpm: int | None = None          # None -> take from limits.for_model
     rpd: int | None = None
     max_retries: int = 5
@@ -142,6 +151,8 @@ def _coerce(value: Any, target: Any) -> Any:
 _ENV_MAP = {
     "GEMINI_MODEL": "model",
     "GEMINI_API_KEY": "api_key",
+    "STOCKFLOW_PROVIDER": "provider",
+    "OLLAMA_HOST": "ollama_host",
     "STOCKFLOW_WORKERS": "workers",
     "STOCKFLOW_MIN_SCORE": "min_score",
     "STOCKFLOW_MIN_MEGAPIXELS": "min_megapixels",
@@ -199,6 +210,18 @@ def load_settings(
         if hasattr(defaults, key):
             values[key] = val
 
+    # A Gemini model id means nothing to Ollama, and GEMINI_MODEL is commonly
+    # set in the environment, so the local provider gets its own default unless
+    # a non-Gemini model was chosen explicitly. It also defaults to one worker:
+    # a single local GPU serves one image at a time, and extra workers only
+    # queue behind it and risk timing out.
+    if values.get("provider") == "ollama":
+        if str(values.get("model", "")).startswith("gemini") or "model" not in values:
+            values["model"] = DEFAULT_OLLAMA_MODEL
+        values.setdefault("workers", 1)
+    if "ollama_host" in values:
+        values["ollama_host"] = str(values["ollama_host"]).rstrip("/")
+
     values["exiftool_path"] = find_exiftool(values.get("exiftool_path", ""))
     values["image_types"] = _resolve_image_types()
 
@@ -222,6 +245,12 @@ def _resolve_image_types() -> frozenset[str]:
 def _validate(s: Settings) -> None:
     if not s.folder.is_dir():
         raise ConfigError(f"Folder not found: {s.folder}")
+    if s.provider not in PROVIDERS:
+        raise ConfigError(
+            f"Unknown provider {s.provider!r}; choose one of: {', '.join(PROVIDERS)}."
+        )
+    if not s.ollama_host.startswith(("http://", "https://")):
+        raise ConfigError(f"--ollama-host must start with http:// or https:// (got {s.ollama_host!r}).")
     if s.workers < 1:
         raise ConfigError("--workers must be at least 1.")
     if not 0 <= s.min_score <= 100:

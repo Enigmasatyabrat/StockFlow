@@ -51,6 +51,30 @@ RESPONSE_SCHEMA: dict = {
 }
 
 
+def json_schema(schema: dict | None = None) -> dict:
+    """RESPONSE_SCHEMA rewritten as standard JSON Schema.
+
+    Gemini takes an OpenAPI subset (upper-case type names, `property_ordering`);
+    Ollama and most other structured-output APIs take plain JSON Schema. Deriving
+    one from the other keeps a single source of truth for what the model must
+    return, whichever provider is asking.
+    """
+    schema = RESPONSE_SCHEMA if schema is None else schema
+    out: dict = {}
+    for key, value in schema.items():
+        if key == "property_ordering":
+            continue
+        if key == "type":
+            out["type"] = str(value).lower()
+        elif key == "properties":
+            out["properties"] = {name: json_schema(sub) for name, sub in value.items()}
+        elif key == "items":
+            out["items"] = json_schema(value)
+        else:
+            out[key] = value
+    return out
+
+
 SYSTEM_PROMPT = """You are a senior commercial stock photo editor and SEO \
 copywriter for contributors selling on Shutterstock, Adobe Stock and similar \
 microstock marketplaces. You have reviewed tens of thousands of submissions \

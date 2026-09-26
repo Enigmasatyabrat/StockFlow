@@ -19,8 +19,10 @@ python stockflow.py FOLDER [options]        # legacy shim, still works
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--model ID` | `gemini-2.5-flash-lite` | Vision model |
-| `--workers N` | 3 | Concurrent workers |
+| `--provider NAME` | `gemini` | `gemini` (Google API) or `ollama` (local/self-hosted model, no API key) |
+| `--model ID` | `gemini-2.5-flash-lite`; `qwen2.5vl:3b` with ollama | Vision model |
+| `--ollama-host URL` | `http://localhost:11434` | Ollama server |
+| `--workers N` | 3; 1 with ollama | Concurrent workers |
 | `--rpm N` | from `limits.py` | Requests-per-minute cap |
 | `--rpd N` | from `limits.py` | Requests-per-day cap |
 
@@ -80,8 +82,10 @@ Environment variables:
 
 | Variable | Maps to |
 |---|---|
-| `GEMINI_API_KEY` | API key (required unless `--dry-run`) |
-| `GEMINI_MODEL` | `--model` |
+| `GEMINI_API_KEY` | API key (required with the gemini provider unless `--dry-run`) |
+| `GEMINI_MODEL` | `--model` (ignored by the ollama provider when it names a Gemini model) |
+| `STOCKFLOW_PROVIDER` | `--provider` |
+| `OLLAMA_HOST` | `--ollama-host` |
 | `STOCKFLOW_WORKERS` | `--workers` |
 | `STOCKFLOW_MIN_SCORE` | `--min-score` |
 | `STOCKFLOW_MIN_MEGAPIXELS` | `--min-megapixels` |
@@ -157,6 +161,6 @@ listed as processable, and the startup banner says so.
 | 1 | A StockFlow error |
 | 2 | Bad arguments or folder |
 | 3 | exiftool not usable |
-| 4 | `GEMINI_API_KEY` missing |
+| 4 | Analysis backend not usable: `GEMINI_API_KEY` missing, or Ollama unreachable / model not pulled |
 | 5 | Registry unreadable |
 | 130 | Interrupted (Ctrl-C) — progress saved |

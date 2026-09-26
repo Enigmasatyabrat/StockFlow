@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+* **Local and self-hosted vision models.** `--provider ollama` analyses
+  images with a vision model served by Ollama instead of the Gemini API: no
+  API key and no per-image cost. It sends the same prompt, constrains the reply
+  with the same schema (converted to JSON Schema), and goes through the same
+  validation, so routing, CSVs and embedded metadata are unchanged. Default
+  model `qwen2.5vl:3b`, one worker; `--ollama-host` points at another machine,
+  ideally through an SSH tunnel. A preflight check says exactly what is wrong
+  when the server is down or the model has not been pulled.
+
 ### Fixed
 
 * **The real daily quota was never learned.** A per-day 429 carries the
@@ -11,6 +22,12 @@
   planning for its 1,000/day estimate. The reported limit is now captured,
   persisted, and used by later runs unless `--rpd` is set; the banner says
   when the limit came from Google.
+
+* A backend outage no longer counts against photos. When the analysis
+  server becomes unreachable mid-run, StockFlow stops and leaves the remaining
+  images pending, the same way it already handled an exhausted daily quota,
+  instead of recording an error for each one and eventually marking them
+  ERROR_PERMANENT.
 
 ## v5.1.0 (2026-09-26)
 
