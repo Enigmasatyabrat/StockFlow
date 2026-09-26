@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from stockflow.cli import build_parser, main
+from stockflow.metadata import ExifToolWriter
 
 
 class TestParser:
@@ -56,7 +57,16 @@ class TestExitCodes:
         assert main([str(tmp_path / "nope")]) == 2
         assert "Folder not found" in capsys.readouterr().err
 
+    def test_missing_exiftool_is_reported_clearly(self, photo_folder, monkeypatch, capsys):
+        monkeypatch.setattr(ExifToolWriter, "available", lambda self: False)
+        code = main([str(photo_folder)])
+        assert code == 3
+        assert "Cannot run exiftool" in capsys.readouterr().err
+
     def test_missing_api_key_is_reported_clearly(self, photo_folder, monkeypatch, capsys):
+        # exiftool is checked first, so it has to look present here or this
+        # test only passes on machines that happen to have exiftool installed.
+        monkeypatch.setattr(ExifToolWriter, "available", lambda self: True)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         code = main([str(photo_folder)])
         assert code == 4
