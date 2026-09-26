@@ -171,7 +171,10 @@ class Pipeline:
         # Shared with the analyzer so throttling applies pool-wide, not per worker.
         self.bucket = bucket or TokenBucket(rpm)
         self.gate = gate or AdaptiveGate()
-        self.quota = DailyQuota(settings.folder / QUOTA_FILE, settings.model, rpd)
+        self.quota = DailyQuota(
+            settings.folder / QUOTA_FILE, settings.model, rpd,
+            use_observed=settings.rpd is None,
+        )
 
     # ------------------------------------------------------------- scanning --
 

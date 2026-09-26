@@ -6,6 +6,7 @@ import pytest
 
 from stockflow.analyzer import (
     FakeAnalyzer,
+    GeminiAnalyzer,
     classify_api_error,
     extract_quota_values,
     parse_analysis,
@@ -218,3 +219,40 @@ class TestResponseSchema:
             assert RESPONSE_SCHEMA["properties"][field]["enum"] == list(
                 SHUTTERSTOCK_CATEGORIES
             )
+
+
+class TestGeminiDailyQuota:
+    """The real per-day limit only ever appears inside a per-day 429."""
+
+    @staticmethod
+    def analyzer_that_raises(exc, observed):
+        a = GeminiAnalyzer("test-key", "gemini-2.5-flash-lite", max_retries=3,
+                           on_quota_observed=lambda qid, val: observed.append((qid, val)))
+
+        class Models:
+            def generate_content(self, **kwargs):
+                raise exc
+
+        class Client:
+            models = Models()
+
+        a._client = Client()
+        return a
+
+    def test_per_day_limit_is_reported_before_stopping(self):
+        observed = []
+        a = self.analyzer_that_raises(
+            quota_error("GenerateRequestsPerDayPerProjectPerModel-FreeTier", value="20"), observed
+        )
+        with pytest.raises(DailyQuotaExhausted):
+            a.analyze(b"jpeg")
+        assert observed == [("GenerateRequestsPerDayPerProjectPerModel-FreeTier", 20)]
+
+    def test_per_day_quota_is_not_retried(self):
+        observed = []
+        a = self.analyzer_that_raises(
+            quota_error("GenerateRequestsPerDayPerProjectPerModel-FreeTier", value="20"), observed
+        )
+        with pytest.raises(DailyQuotaExhausted):
+            a.analyze(b"jpeg")
+        assert a.stats["calls"] == 1

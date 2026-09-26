@@ -151,7 +151,8 @@ def print_banner(settings: Settings, writer: ExifToolWriter, quota, model_limits
     print(f"  Workers           : {settings.workers}")
     print(
         f"  Rate limit        : {settings.rpm or model_limits.rpm}/min, "
-        f"{settings.rpd or model_limits.rpd}/day  [{model_limits.source}]"
+        f"{quota.limit}/day  "
+        f"[{'daily limit reported by Google' if quota.observed else model_limits.source}]"
     )
     print(f"  Daily quota used  : {quota.used}/{quota.limit}")
     print(f"  Batch limit       : {settings.batch_limit}")
