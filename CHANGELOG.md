@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+* **The real daily quota was never learned.** A per-day 429 carries the
+  project's true limit (as low as 20 requests/day on some free-tier projects),
+  but the Gemini client re-raised it before extracting that value, and the
+  quota file stored the limit without ever reading it back. StockFlow kept
+  planning for its 1,000/day estimate. The reported limit is now captured,
+  persisted, and used by later runs unless `--rpd` is set; the banner says
+  when the limit came from Google.
+
 ## v5.1.0 (2026-09-26)
 
 ### Added
