@@ -11,7 +11,7 @@ folder/
   │                  normalize       PNG/HEIC/RAW/oversize → derived JPEG
   │                  pHash           near-duplicate?   → logged, never moved
   │                  analyze_quality focus / noise / exposure, full resolution
-  │                  ──► Gemini      title, keywords, category, score, flags
+  │                  ──► vision model  title, keywords, category, score, flags (Gemini or Ollama)
   │                  choose_status   route + reason, produced together
   │                  embed metadata  IPTC + XMP via exiftool
   │                  commit          intent → move → record
@@ -48,7 +48,8 @@ Four tiers, dependencies point downward only.
 | `imaging/normalize.py` | Conversion, resizing, API encoding |
 | `imaging/quality.py` | Local measurement on full-resolution pixels |
 | `hashing.py` | SHA-256, pHash, cross-run dedupe index |
-| `analyzer.py` | Gemini client, retry, error classification |
+| `analyzer.py` | Analyzer protocol, response parsing, Gemini client, retry, error classification |
+| `ollama.py` | Ollama client for local or self-hosted vision models (stdlib HTTP only) |
 | `metadata.py` | exiftool via UTF-8 argfile |
 | `registry.py` | Per-folder state, migration, crash recovery |
 | `ratelimit.py` | Token bucket, adaptive gate, daily quota |

@@ -12,7 +12,7 @@ import threading
 import pytest
 
 from stockflow.analyzer import FakeAnalyzer
-from stockflow.errors import DailyQuotaExhausted, MetadataWriteError
+from stockflow.errors import BackendUnavailable, DailyQuotaExhausted, MetadataWriteError
 from stockflow.metadata import FakeMetadataWriter
 from stockflow.models import (
     FOLDER_DUPLICATES,
@@ -233,6 +233,22 @@ class TestQuota:
         analyzer = FakeAnalyzer()
         _, result = run(s, analyzer=analyzer)
         assert len(analyzer.calls) <= 2
+
+
+class TestBackendUnavailable:
+    def test_outage_stops_the_run_without_blaming_the_photo(self, settings, make_image):
+        for i in range(3):
+            make_image(f"p{i}.jpg", folder=settings.folder)
+        analyzer = FakeAnalyzer(errors=[BackendUnavailable("Cannot reach Ollama")] * 3)
+        pipeline, result = run(settings, analyzer=analyzer)
+
+        assert len(analyzer.calls) == 1, "the run must stop at the first outage"
+        for i in range(3):
+            name = f"p{i}.jpg"
+            assert pipeline.registry.status_of(name) is not Status.ERROR
+            assert pipeline.registry.is_pending(name, max_attempts=3)
+            assert (settings.folder / name).exists()
+        assert result.summary["remaining"] == 3
 
 
 class TestDryRun:

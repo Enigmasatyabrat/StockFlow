@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from stockflow.config import Settings, find_exiftool, load_settings
+from stockflow.config import DEFAULT_OLLAMA_MODEL, Settings, find_exiftool, load_settings
 from stockflow.errors import ConfigError
 
 
@@ -113,3 +113,51 @@ class TestSettingsHelpers:
     def test_image_types_reflect_installed_codecs(self, settings):
         assert ".jpg" in settings.image_types
         assert ".tif" in settings.image_types
+
+
+class TestProvider:
+    def test_default_is_gemini(self, photo_folder):
+        s = load_settings({"folder": str(photo_folder)}, env={})
+        assert s.provider == "gemini"
+        assert s.model == "gemini-2.5-flash-lite"
+
+    def test_ollama_gets_a_local_model_and_one_worker(self, photo_folder):
+        s = load_settings({"folder": str(photo_folder), "provider": "ollama"}, env={})
+        assert s.model == DEFAULT_OLLAMA_MODEL
+        assert s.workers == 1
+        assert s.ollama_host == "http://localhost:11434"
+
+    def test_ollama_ignores_a_gemini_model_from_the_environment(self, photo_folder):
+        s = load_settings(
+            {"folder": str(photo_folder), "provider": "ollama"},
+            env={"GEMINI_MODEL": "gemini-2.5-flash"},
+        )
+        assert s.model == DEFAULT_OLLAMA_MODEL
+
+    def test_explicit_local_model_and_workers_are_kept(self, photo_folder):
+        s = load_settings(
+            {"folder": str(photo_folder), "provider": "ollama",
+             "model": "gemma3:4b", "workers": 2},
+            env={},
+        )
+        assert s.model == "gemma3:4b"
+        assert s.workers == 2
+
+    def test_provider_and_host_from_environment(self, photo_folder):
+        s = load_settings(
+            {"folder": str(photo_folder)},
+            env={"STOCKFLOW_PROVIDER": "ollama", "OLLAMA_HOST": "http://10.0.0.5:11434/"},
+        )
+        assert s.provider == "ollama"
+        assert s.ollama_host == "http://10.0.0.5:11434"
+
+    def test_unknown_provider_rejected(self, photo_folder):
+        with pytest.raises(ConfigError, match="Unknown provider"):
+            load_settings({"folder": str(photo_folder), "provider": "openai"}, env={})
+
+    def test_host_must_be_a_url(self, photo_folder):
+        with pytest.raises(ConfigError, match="ollama-host"):
+            load_settings(
+                {"folder": str(photo_folder), "provider": "ollama", "ollama_host": "localhost:11434"},
+                env={},
+            )

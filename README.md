@@ -54,7 +54,7 @@ pip install -e ".[raw]"
 You also need **ExifTool** — put `exiftool.exe` beside `stockflow.py`, or set
 `STOCKFLOW_EXIFTOOL` to its full path.
 
-Then set your Gemini API key:
+To use Gemini, set your API key (skip this for a local model; see "Running free, with a local model" below):
 
 ```powershell
 setx GEMINI_API_KEY "YOUR_API_KEY"
@@ -84,6 +84,34 @@ On Windows you can also just double-click `run_stockflow.bat`, or drag a
 folder onto it. It previews first and asks before doing anything.
 
 `python stockflow.py FOLDER` and `python -m stockflow FOLDER` both work too.
+
+### Running free, with a local model
+
+Instead of Gemini, StockFlow can use a vision model served by
+[Ollama](https://ollama.com): no API key, no per-image cost, and your photos
+never leave machines you control. Same prompt, same schema, same validation,
+folders, CSVs and embedded metadata.
+
+```bash
+ollama pull qwen2.5vl:3b
+stockflow "D:\Photos\batch_01" --provider ollama
+```
+
+`--model` picks any other Ollama vision model. Smaller models are faster and
+make more mistakes than Gemini, so read the review folder and the keywords
+before submitting. A GPU matters: on CPU alone, expect minutes per image.
+
+To use a model running on another computer, tunnel Ollama over SSH rather
+than exposing its port, and keep the default host:
+
+```bash
+ssh -N -L 11434:localhost:11434 you@server
+```
+
+Only the downsized copy StockFlow already prepares for analysis crosses the
+tunnel; originals stay where they are. If the server becomes unreachable
+mid-run, StockFlow stops and leaves the remaining photos pending instead of
+counting the outage against them.
 
 ### Calibrating the quality thresholds
 
@@ -161,7 +189,7 @@ stranded.
 
 * Python 3.11+
 * ExifTool
-* A Google Gemini API key
+* A Google Gemini API key, **or** [Ollama](https://ollama.com) with a vision model (free, local; see "Running free, with a local model")
 
 ---
 

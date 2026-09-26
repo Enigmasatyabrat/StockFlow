@@ -10,7 +10,14 @@ import threading
 from pathlib import Path
 
 from . import limits as limits_mod
-from .config import VERSION, Settings, load_settings
+from .config import (
+    DEFAULT_OLLAMA_HOST,
+    DEFAULT_OLLAMA_MODEL,
+    PROVIDERS,
+    VERSION,
+    Settings,
+    load_settings,
+)
 from .errors import ConfigError, RegistryError, StockFlowError
 from .imaging import loader
 from .metadata import ExifToolWriter
@@ -87,9 +94,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Also retry images previously marked ERROR or ERROR_PERMANENT.")
 
     g = p.add_argument_group("model")
-    g.add_argument("--model", help="Gemini model id (default gemini-2.5-flash-lite).")
+    g.add_argument("--provider", choices=PROVIDERS,
+                   help="Where images are analysed: gemini (Google API, needs GEMINI_API_KEY) "
+                        "or ollama (a free vision model served by Ollama). Default gemini.")
+    g.add_argument("--model", help="Model id. Default gemini-2.5-flash-lite with gemini, "
+                                   f"{DEFAULT_OLLAMA_MODEL} with ollama.")
+    g.add_argument("--ollama-host", metavar="URL",
+                   help=f"Ollama server (default {DEFAULT_OLLAMA_HOST}). For a model on another "
+                        "machine, tunnel it over SSH and keep the default.")
     g.add_argument("--workers", type=int, metavar="N",
-                   help="Concurrent workers (default 3).")
+                   help="Concurrent workers (default 3; 1 with --provider ollama).")
     g.add_argument("--rpm", type=int, metavar="N",
                    help="Requests-per-minute cap. Overrides the built-in estimate.")
     g.add_argument("--rpd", type=int, metavar="N",
@@ -147,14 +161,28 @@ def print_banner(settings: Settings, writer: ExifToolWriter, quota, model_limits
     print("=" * 66)
     print(f"StockFlow v{VERSION}")
     print(f"  Folder            : {settings.folder}")
+    if settings.provider == "ollama":
+        from .ollama import describe
+
+        print(f"  Provider          : Ollama at {describe(settings.ollama_host)}")
+    else:
+        print("  Provider          : Gemini API")
     print(f"  Model             : {settings.model}")
     print(f"  Workers           : {settings.workers}")
-    print(
-        f"  Rate limit        : {settings.rpm or model_limits.rpm}/min, "
-        f"{quota.limit}/day  "
-        f"[{'daily limit reported by Google' if quota.observed else model_limits.source}]"
-    )
-    print(f"  Daily quota used  : {quota.used}/{quota.limit}")
+    if settings.provider == "ollama":
+        print("  Rate limit        : none - local model, no per-image cost")
+    else:
+        if settings.rpd:
+            limit_source = "set with --rpd"
+        elif quota.observed:
+            limit_source = "daily limit reported by Google"
+        else:
+            limit_source = model_limits.source
+        print(
+            f"  Rate limit        : {settings.rpm or model_limits.rpm}/min, "
+            f"{quota.limit}/day  [{limit_source}]"
+        )
+        print(f"  Daily quota used  : {quota.used}/{quota.limit}")
     print(f"  Batch limit       : {settings.batch_limit}")
     print(f"  Quality threshold : {settings.min_score}/100")
     print(f"  Resolution min    : {settings.min_megapixels}MP")
@@ -215,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     analyzer = None
-    if not settings.dry_run:
+    if not settings.dry_run and settings.provider == "gemini":
         if not settings.api_key:
             print(
                 "\nGEMINI_API_KEY is not set.\n"
@@ -232,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from .ratelimit import AdaptiveGate, TokenBucket
 
-        model_limits = limits_mod.for_model(settings.model)
+        model_limits = limits_mod.for_provider(settings.provider, settings.model)
         bucket = TokenBucket(settings.rpm or model_limits.rpm)
         gate = AdaptiveGate()
 
@@ -240,6 +268,19 @@ def main(argv: list[str] | None = None) -> int:
             from .analyzer import FakeAnalyzer
 
             analyzer = FakeAnalyzer()
+        elif settings.provider == "ollama":
+            from .ollama import OllamaAnalyzer
+
+            analyzer = OllamaAnalyzer(
+                settings.ollama_host,
+                settings.model,
+                max_retries=min(settings.max_retries, 3),
+                stop=stop,
+            )
+            problem = analyzer.check()
+            if problem:
+                print(f"\n{problem}\n", file=sys.stderr)
+                return 4
         else:
             from .analyzer import GeminiAnalyzer
 
@@ -256,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
             settings, analyzer, writer, stop=stop, bucket=bucket, gate=gate,
             progress=lambda msg: print(msg, flush=True),
         )
-        if not settings.dry_run:
+        if not settings.dry_run and settings.provider == "gemini":
             analyzer._on_quota_observed = lambda qid, val: _observe_quota(pipeline, qid, val)
 
         if not settings.quiet:
