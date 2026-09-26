@@ -1,5 +1,27 @@
 # Changelog
 
+## v5.1.0 (2026-09-26)
+
+### Added
+
+* **`--calibrate`** derives the blur/noise/clipping thresholds from your own
+  photographs instead of the mathematical defaults. Point it at one folder to
+  see how quality is distributed and get a suggested percentile cut, or pass
+  `--against` a folder of rejected images to find the threshold that actually
+  separates kept from rejected. It prints the matching `--min-blur`,
+  `--max-noise` and `--max-clipping` flags. Reads pixels only: no API calls,
+  nothing written, nothing moved.
+* **Continuous integration.** The test suite runs on every push and pull
+  request on Linux (Python 3.11, 3.12, 3.13) and Windows (3.12), from a clean
+  install of `pyproject.toml`. Dependabot proposes monthly dependency updates.
+
+### Fixed
+
+* `test_missing_api_key_is_reported_clearly` passed only on machines with
+  exiftool installed: the CLI checks for exiftool first, so without it the exit
+  code was 3, not 4. The test now isolates the API-key check, and exit code 3
+  (exiftool missing) has a test of its own.
+
 ## v5.0.0 (2026-08-25)
 
 A rewrite of the internals. The workflow, folder layout, registry filename and
