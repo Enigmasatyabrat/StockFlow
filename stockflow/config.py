@@ -16,7 +16,7 @@ from typing import Any, Mapping
 
 from .errors import ConfigError
 
-VERSION = "5.0.0"
+VERSION = "5.1.0"
 
 #: Repository root -- the directory containing the `stockflow/` package.
 #: NOT `Path(__file__).parent`, which is the package dir; exiftool.exe lives
