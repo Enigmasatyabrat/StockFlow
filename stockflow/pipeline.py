@@ -36,6 +36,7 @@ from . import limits as limits_mod
 from .analyzer import Analyzer
 from .config import Settings
 from .errors import (
+    BackendUnavailable,
     DailyQuotaExhausted,
     ImageDecodeError,
     StockFlowError,
@@ -164,7 +165,7 @@ class Pipeline:
         self._records_lock = threading.Lock()
         self.stopped_on_quota = False
 
-        model_limits = limits_mod.for_model(settings.model)
+        model_limits = limits_mod.for_provider(settings.provider, settings.model)
         self.model_limits = model_limits
         rpm = settings.rpm or model_limits.rpm
         rpd = settings.rpd or model_limits.rpd
@@ -268,6 +269,11 @@ class Pipeline:
             self.stop.set()
             log.warning("Daily quota exhausted at %s", path.name)
             self._note(f"DAILY QUOTA EXHAUSTED  stopped at {path.name}  {exc}")
+            return
+        except BackendUnavailable as exc:
+            self.stop.set()
+            log.error("Analysis backend unavailable at %s: %s", path.name, exc)
+            self._note(f"BACKEND UNAVAILABLE  stopped at {path.name}  {exc}")
             return
         except Exception as exc:  # pragma: no cover - defensive
             log.exception("Unhandled failure on %s", path.name)
@@ -380,7 +386,7 @@ class Pipeline:
             work = None  # ownership transferred; do not clean up
             return record
 
-        except DailyQuotaExhausted:
+        except (DailyQuotaExhausted, BackendUnavailable):
             raise
         except (UnsupportedFormatError, ImageDecodeError) as exc:
             return self._record_error(path, exc, record=record, permanent=True, prefix=prefix)
