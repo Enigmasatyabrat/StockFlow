@@ -2,12 +2,6 @@
 
 ## Next
 
-**Calibrate quality thresholds from real outcomes.** The defaults in
-`stockflow/imaging/quality.py` are derived from the maths, not from a labelled
-dataset. Feeding back which submissions a marketplace actually accepted or
-rejected would turn them from educated guesses into per-portfolio numbers.
-This is the single largest accuracy win available.
-
 **Confirm real rate limits.** Google no longer publishes a per-model table, so
 `stockflow/limits.py` ships conservative estimates and self-corrects from 429
 responses. Worth revisiting if an authoritative source reappears.

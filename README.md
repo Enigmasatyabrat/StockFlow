@@ -225,7 +225,6 @@ The suite runs with no API key, no network, and no real exiftool required
 
 ## Roadmap
 
-* Per-portfolio threshold calibration from your own accepted/rejected history
 * Multi-agency upload support
 * Contributor analytics
 
