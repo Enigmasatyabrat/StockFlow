@@ -140,10 +140,15 @@ class DailyQuota:
     run that cannot finish says so before spending anything.
     """
 
-    def __init__(self, path: Path, model: str, limit: int):
+    def __init__(self, path: Path, model: str, limit: int, *, use_observed: bool = True):
+        """``use_observed``: prefer a limit Google reported in an earlier run over
+        ``limit``. False when the user set ``--rpd`` explicitly."""
         self.path = path
         self.model = model
         self.limit = limit
+        #: True once the limit comes from a real 429 rather than an estimate.
+        self.observed = False
+        self._use_observed = use_observed
         self._lock = threading.Lock()
         self._used = 0
         self._date = self._today()
@@ -159,7 +164,17 @@ class DailyQuota:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except Exception:
             return
-        if raw.get("pacific_date") == self._date and raw.get("model") == self.model:
+        if raw.get("model") != self.model:
+            return
+        # A limit Google reported outlives the day it was seen: it's a property
+        # of the project's tier, not of today's usage.
+        if self._use_observed and raw.get("limit_observed"):
+            try:
+                self.limit = int(raw["limit"])
+                self.observed = True
+            except (KeyError, TypeError, ValueError):
+                pass
+        if raw.get("pacific_date") == self._date:
             self._used = int(raw.get("requests", 0))
             self._observed_tokens = dict(raw.get("tokens", {}))
 
@@ -172,6 +187,7 @@ class DailyQuota:
                         "model": self.model,
                         "requests": self._used,
                         "limit": self.limit,
+                        "limit_observed": self.observed,
                         "tokens": self._observed_tokens,
                     },
                     indent=2,
@@ -215,8 +231,10 @@ class DailyQuota:
                 self._observed_tokens["output"] = output_tokens
 
     def set_limit(self, limit: int) -> None:
+        """Adopt a limit the API reported. Persisted, and reused by later runs."""
         with self._lock:
             self.limit = limit
+            self.observed = True
             self._save()
 
     @property

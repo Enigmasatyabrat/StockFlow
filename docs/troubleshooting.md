@@ -56,6 +56,18 @@ without it.
 Working as intended. Nothing is lost and nothing is blamed on the photo — the
 remaining images stay pending. Free-tier quotas reset at midnight US Pacific.
 
+Free-tier daily limits can be far lower than the built-in estimate: in
+September 2026 one project reported **20 requests per day** for
+`gemini-2.5-flash-lite`. StockFlow learns the real figure from that first
+429, remembers it in `.stockflow_quota.json`, and plans later runs around it —
+the banner then says "daily limit reported by Google". `--rpd` still
+overrides it.
+
+The counter is kept per photo folder, while Google counts per Cloud project.
+Runs in several folders on the same day share one Google allowance, so a
+folder can show spare quota that Google has already spent; the run still
+stops cleanly on the first 429.
+
 Run it again after that, or remove the ceiling entirely by adding billing to
 your Google Cloud project. At measured usage (~1,426 input and ~395 output
 tokens per image) that is roughly **$0.0003 per image** — about $3 for ten
