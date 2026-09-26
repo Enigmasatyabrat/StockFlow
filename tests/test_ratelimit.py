@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -103,6 +104,41 @@ class TestDailyQuota:
         quota = DailyQuota(tmp_path / "q.json", "m", limit=1000)
         quota.set_limit(50)
         assert quota.limit == 50
+
+    def test_observed_limit_is_remembered_by_later_runs(self, tmp_path):
+        path = tmp_path / "q.json"
+        DailyQuota(path, "m", limit=1000).set_limit(20)
+        later = DailyQuota(path, "m", limit=1000)
+        assert later.limit == 20
+        assert later.observed
+
+    def test_observed_limit_outlives_the_day_it_was_seen(self, tmp_path):
+        path = tmp_path / "q.json"
+        path.write_text(json.dumps({
+            "pacific_date": "2000-01-01", "model": "m", "requests": 20,
+            "limit": 20, "limit_observed": True,
+        }), encoding="utf-8")
+        quota = DailyQuota(path, "m", limit=1000)
+        assert quota.limit == 20
+        assert quota.used == 0, "yesterday's usage must not carry over"
+
+    def test_an_estimate_is_not_mistaken_for_an_observation(self, tmp_path):
+        # Files written before this fix store the estimate with no flag.
+        path = tmp_path / "q.json"
+        path.write_text(json.dumps({
+            "pacific_date": "2000-01-01", "model": "m", "requests": 0, "limit": 1000,
+        }), encoding="utf-8")
+        assert DailyQuota(path, "m", limit=250).limit == 250
+
+    def test_explicit_rpd_beats_an_observed_limit(self, tmp_path):
+        path = tmp_path / "q.json"
+        DailyQuota(path, "m", limit=1000).set_limit(20)
+        assert DailyQuota(path, "m", limit=500, use_observed=False).limit == 500
+
+    def test_observed_limit_is_per_model(self, tmp_path):
+        path = tmp_path / "q.json"
+        DailyQuota(path, "model-a", limit=1000).set_limit(20)
+        assert DailyQuota(path, "model-b", limit=1000).limit == 1000
 
     def test_unreadable_file_does_not_crash(self, tmp_path):
         path = tmp_path / "q.json"

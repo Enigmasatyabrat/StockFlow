@@ -254,12 +254,14 @@ class GeminiAnalyzer:
             except Exception as exc:
                 mapped = classify_api_error(exc)
 
-                if isinstance(mapped, DailyQuotaExhausted):
-                    raise mapped from exc
-
+                # Before re-raising: a per-day 429 is the only place the real
+                # daily limit ever appears, and it must reach the limiter.
                 for quota_id, value in extract_quota_values(exc):
                     if self._on_quota_observed:
                         self._on_quota_observed(quota_id, value)
+
+                if isinstance(mapped, DailyQuotaExhausted):
+                    raise mapped from exc
 
                 last_error = mapped
                 if attempt >= self._max_retries:
