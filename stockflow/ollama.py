@@ -31,6 +31,20 @@ from .prompt import SYSTEM_PROMPT, build_prompt, json_schema
 
 log = logging.getLogger(__name__)
 
+#: Small local models can fall into a repetition loop inside the keyword array
+#: ("dragonfly insect macro close-up", "dragonfly insect macro close-up head",
+#: ...) and generate until the context is full -- observed at 6-10 minutes per
+#: image with qwen2.5vl:3b. A repeat penalty prevents most loops; the token cap
+#: bounds the rest. A full, valid answer (title, description, 50 keywords,
+#: flags) is well under 1,500 tokens, so the cap never truncates a good one; a
+#: truncated loop fails JSON parsing and is retried.
+#:
+#: The schema's keyword array is deliberately NOT bounded with maxItems:
+#: Ollama 0.34.4's grammar engine fails with "Unexpected empty grammar stack"
+#: on array-length constraints and then rejects later requests too.
+MAX_OUTPUT_TOKENS = 1500
+REPEAT_PENALTY = 1.15
+
 #: (url, payload or None for GET, timeout seconds) -> decoded JSON body.
 Transport = Callable[[str, "dict | None", float], dict]
 
@@ -122,7 +136,11 @@ class OllamaAnalyzer:
             "model": self._model,
             "stream": False,
             "format": self._schema,
-            "options": {"temperature": self._temperature},
+            "options": {
+                "temperature": self._temperature,
+                "num_predict": MAX_OUTPUT_TOKENS,
+                "repeat_penalty": REPEAT_PENALTY,
+            },
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {

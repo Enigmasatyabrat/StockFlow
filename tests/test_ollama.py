@@ -83,6 +83,16 @@ class TestRequest:
         assert base64.b64decode(user["images"][0]) == b"jpeg-bytes"
         assert "measured: sharp" in user["content"]
 
+    def test_bounds_runaway_generation_without_array_length_constraints(self):
+        t = ScriptedTransport(chat_reply())
+        analyzer(t).analyze(b"x")
+        payload = t.requests[0][1]
+        assert payload["options"]["num_predict"] == 1500
+        assert payload["options"]["repeat_penalty"] > 1.0
+        # maxItems/minItems crash Ollama 0.34.4's grammar engine.
+        keywords = payload["format"]["properties"]["keywords"]
+        assert "maxItems" not in keywords and "minItems" not in keywords
+
     def test_parses_into_the_same_analysis_as_gemini(self):
         data = FakeAnalyzer.sample(title="Macro of a green leaf beetle on a fern")
         result = analyzer(ScriptedTransport(chat_reply(data))).analyze(b"x")
