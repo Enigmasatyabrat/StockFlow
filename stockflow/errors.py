@@ -63,6 +63,14 @@ class MalformedResponseError(AnalyzerError):
     """The model returned something that isn't usable analysis."""
 
 
+class MetadataMissing(AnalyzerError):
+    """The sidecar provider has no metadata file for this image yet.
+
+    Not an error with the photo: it stays pending and is picked up on a later
+    run, so a batch can be written in several sittings.
+    """
+
+
 class MetadataWriteError(StockFlowError):
     """exiftool refused to write, or wrote something we can't trust."""
 

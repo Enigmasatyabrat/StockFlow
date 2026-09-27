@@ -55,7 +55,7 @@ LOCAL = ModelLimits(600, 10**9, 1_000_000, "local model - no quota")
 
 def for_provider(provider: str, model: str) -> ModelLimits:
     """Limits for ``model`` as served by ``provider``."""
-    if provider == "ollama":
+    if provider in ("ollama", "sidecar"):
         return LOCAL
     return for_model(model)
 

@@ -161,3 +161,25 @@ class TestProvider:
                 {"folder": str(photo_folder), "provider": "ollama", "ollama_host": "localhost:11434"},
                 env={},
             )
+
+
+class TestExampleConfigs:
+    """The files in examples/ are documentation people copy; keep them loadable."""
+
+    @pytest.mark.parametrize("name", ["free-tier", "paid-tier"])
+    def test_example_config_loads(self, photo_folder, name):
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "examples" / name / "stockflow.json"
+        s = load_settings({"folder": str(photo_folder)}, env={}, config_path=path)
+        assert s.provider == "gemini"
+        assert s.api_key == "", "an example config must never carry an API key"
+
+    def test_example_metadata_is_valid(self):
+        from pathlib import Path
+
+        from stockflow.analyzer import parse_analysis
+
+        path = Path(__file__).resolve().parents[1] / "examples" / "claude-code" / "example-metadata.json"
+        analysis = parse_analysis(json.loads(path.read_text(encoding="utf-8")))
+        assert 40 <= len(analysis.keywords) <= 50

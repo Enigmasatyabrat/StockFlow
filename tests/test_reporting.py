@@ -15,6 +15,7 @@ from stockflow.reporting import (
     ReviewLog,
     UploadCsv,
     adobe_row,
+    format_summary,
     shutterstock_row,
     write_report,
 )
@@ -183,3 +184,23 @@ class TestWriteReport:
         assert "blur" in rows[0]
         assert "412.5" in rows[1]
         assert "soft" in rows[1]
+
+
+class TestSummaryByProvider:
+    BASE = {"api_calls": 3, "api_retries": 0, "daily_quota_used": 3, "daily_quota_limit": 20}
+
+    def test_gemini_shows_api_calls_and_quota(self):
+        text = format_summary({**self.BASE, "provider": "gemini"})
+        assert "API calls / retries" in text
+        assert "Daily quota used       : 3/20" in text
+
+    def test_sidecar_shows_files_read_and_no_quota(self):
+        text = format_summary({**self.BASE, "provider": "sidecar"})
+        assert "Metadata files read    : 3" in text
+        assert "API calls" not in text and "Daily quota" not in text
+
+    def test_local_model_shows_no_quota(self):
+        assert "Daily quota" not in format_summary({**self.BASE, "provider": "ollama"})
+
+    def test_older_summaries_without_a_provider_still_show_the_quota(self):
+        assert "Daily quota used" in format_summary(dict(self.BASE))

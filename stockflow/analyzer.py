@@ -12,6 +12,7 @@ import random
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Any, Protocol
 
 from .errors import (
@@ -29,9 +30,15 @@ log = logging.getLogger(__name__)
 
 
 class Analyzer(Protocol):
-    """Anything that can turn image bytes into an :class:`Analysis`."""
+    """Anything that can turn image bytes into an :class:`Analysis`.
 
-    def analyze(self, image_bytes: bytes, quality_note: str = "") -> Analysis: ...
+    ``source`` is the original file. Vision models ignore it; the sidecar
+    provider uses it to find the metadata written for that file.
+    """
+
+    def analyze(
+        self, image_bytes: bytes, quality_note: str = "", *, source: Path | None = None
+    ) -> Analysis: ...
 
 
 # ------------------------------------------------------------- parsing --
@@ -219,7 +226,9 @@ class GeminiAnalyzer:
         with self._stats_lock:
             self.stats[key] = self.stats.get(key, 0) + n
 
-    def analyze(self, image_bytes: bytes, quality_note: str = "") -> Analysis:
+    def analyze(
+        self, image_bytes: bytes, quality_note: str = "", *, source: Path | None = None
+    ) -> Analysis:
         types = self._types
         config = types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
@@ -356,7 +365,9 @@ class FakeAnalyzer:
         data.update(overrides)
         return data
 
-    def analyze(self, image_bytes: bytes, quality_note: str = "") -> Analysis:
+    def analyze(
+        self, image_bytes: bytes, quality_note: str = "", *, source: Path | None = None
+    ) -> Analysis:
         with self._lock:
             index = len(self.calls)
             self.calls.append(image_bytes)

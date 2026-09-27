@@ -4,6 +4,18 @@
 
 ### Added
 
+* **Metadata from files: `--provider sidecar`.** Each photo's metadata can come
+  from `metadata/<filename>.json`, written by a person, a script or an AI
+  assistant, validated exactly like a model response. No AI call is made;
+  everything else (dedupe, quality gates, sorting, IPTC/XMP, CSVs) is
+  unchanged. Photos without a file stay pending. `--prepare-sidecars` lists
+  what's missing and writes a 1024 px preview plus a full-resolution crop of
+  the four corners, where small signatures and date stamps stay legible.
+* **Examples** for four ways to run: Gemini free tier, Gemini paid tier, a
+  `CLAUDE.md` that lets Claude Code work a batch folder, and the local model.
+* The end-of-run summary shows files read instead of API calls, and no daily
+  quota, when no API is involved.
+
 * **Local and self-hosted vision models.** `--provider ollama` analyses
   images with a vision model served by Ollama instead of the Gemini API: no
   API key and no per-image cost. It sends the same prompt, constrains the reply

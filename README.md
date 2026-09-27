@@ -113,6 +113,24 @@ tunnel; originals stay where they are. If the server becomes unreachable
 mid-run, StockFlow stops and leaves the remaining photos pending instead of
 counting the outage against them.
 
+### Writing the metadata yourself, or with Claude Code
+
+`--provider sidecar` makes no AI call at all. Each photo's metadata comes from a
+file, `metadata/<filename>.json`, in the same format a vision model returns and
+checked by the same validation. Whoever writes it (you, a script, or an AI
+assistant working in the folder), StockFlow does everything else.
+
+```bash
+stockflow "D:\Photos\batch_01" --prepare-sidecars   # list what's missing, write previews
+stockflow "D:\Photos\batch_01" --provider sidecar   # process what has metadata
+```
+
+`--prepare-sidecars` writes a 1024 px preview of each waiting photo plus its four
+corners at full resolution, where small signatures and date stamps stay legible.
+Photos without a file yet stay pending. [`examples/`](examples/) has ready-made
+setups: Gemini free tier, Gemini paid tier, and a `CLAUDE.md` that lets Claude
+Code work a whole batch folder.
+
 ### Calibrating the quality thresholds
 
 The blur/noise/clipping defaults are derived from the mathematics, not from
