@@ -95,8 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("model")
     g.add_argument("--provider", choices=PROVIDERS,
-                   help="Where images are analysed: gemini (Google API, needs GEMINI_API_KEY) "
-                        "or ollama (a free vision model served by Ollama). Default gemini.")
+                   help="Where image metadata comes from: gemini (Google API, needs "
+                        "GEMINI_API_KEY), ollama (a vision model served by Ollama), or sidecar "
+                        "(metadata/<file>.json written by you or another tool; no AI call). "
+                        "Default gemini.")
     g.add_argument("--model", help="Model id. Default gemini-2.5-flash-lite with gemini, "
                                    f"{DEFAULT_OLLAMA_MODEL} with ollama.")
     g.add_argument("--ollama-host", metavar="URL",
@@ -140,6 +142,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("-v", "--verbose", action="store_true", default=None, help="Show debug detail.")
     g.add_argument("-q", "--quiet", action="store_true", default=None, help="Only warnings and errors.")
 
+    g = p.add_argument_group("sidecar")
+    g.add_argument("--prepare-sidecars", action="store_true", default=None,
+                   help="For --provider sidecar: write a preview and a full-resolution corner "
+                        "crop for every image that has no metadata file yet, list them in "
+                        "metadata/_PENDING.txt, and exit. Nothing is moved.")
+
     g = p.add_argument_group("calibration")
     g.add_argument("--calibrate", action="store_true", default=None,
                    help="Measure quality across the folder and report how it distributes, "
@@ -165,12 +173,17 @@ def print_banner(settings: Settings, writer: ExifToolWriter, quota, model_limits
         from .ollama import describe
 
         print(f"  Provider          : Ollama at {describe(settings.ollama_host)}")
+    elif settings.provider == "sidecar":
+        print("  Provider          : sidecar files in metadata/ (no AI call)")
     else:
         print("  Provider          : Gemini API")
-    print(f"  Model             : {settings.model}")
+    if settings.provider != "sidecar":
+        print(f"  Model             : {settings.model}")
     print(f"  Workers           : {settings.workers}")
     if settings.provider == "ollama":
         print("  Rate limit        : none - local model, no per-image cost")
+    elif settings.provider == "sidecar":
+        print("  Rate limit        : none - no API calls")
     else:
         if settings.rpd:
             limit_source = "set with --rpd"
@@ -226,6 +239,9 @@ def main(argv: list[str] | None = None) -> int:
     # Calibration reads pixels and nothing else -- no exiftool, no API key,
     # and nothing written, not even a log file. It says so in its banner, so
     # it must not quietly create a Reports/ directory either.
+    if args.prepare_sidecars:
+        return cmd_prepare_sidecars(settings)
+
     if args.calibrate:
         setup_logging(settings, write_file=False)
         return cmd_calibrate(settings, args)
@@ -268,6 +284,18 @@ def main(argv: list[str] | None = None) -> int:
             from .analyzer import FakeAnalyzer
 
             analyzer = FakeAnalyzer()
+        elif settings.provider == "sidecar":
+            from .sidecar import SIDECAR_DIRNAME, SidecarAnalyzer, sidecar_dir
+
+            if not sidecar_dir(settings.folder).is_dir():
+                print(
+                    f"\nNo {SIDECAR_DIRNAME}/ folder in {settings.folder}.\n"
+                    f"Run with --prepare-sidecars first, then write "
+                    f"{SIDECAR_DIRNAME}/<filename>.json for each image.\n",
+                    file=sys.stderr,
+                )
+                return 4
+            analyzer = SidecarAnalyzer(settings.folder)
         elif settings.provider == "ollama":
             from .ollama import OllamaAnalyzer
 
@@ -316,6 +344,23 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     _print_outcome(result, settings)
+    return 0
+
+
+def cmd_prepare_sidecars(settings: Settings) -> int:
+    """List the images still needing metadata and write what's needed to write it."""
+    from .sidecar import PENDING_FILENAME, PREVIEW_DIRNAME, SIDECAR_DIRNAME, prepare
+
+    sources = list(loader.iter_source_files(settings.folder, settings))
+    pending = prepare(settings.folder, sources, settings.api_max_edge)
+    done = len(sources) - len(pending)
+    print(f"{len(sources)} image(s) in {settings.folder}: {done} with metadata, {len(pending)} pending.")
+    if pending:
+        print(f"  Previews and corner crops : {SIDECAR_DIRNAME}/{PREVIEW_DIRNAME}/")
+        print(f"  Still to write            : {SIDECAR_DIRNAME}/{PENDING_FILENAME}")
+        print(f"  One file per image        : {SIDECAR_DIRNAME}/<filename>.json")
+    else:
+        print("  Everything has metadata. Run with --provider sidecar to process.")
     return 0
 
 
