@@ -211,6 +211,19 @@ stranded.
 
 ---
 
+## Related projects
+
+StockFlow is one of a small family of tools with the same shape — a folder of
+photos in, sorted folders and metadata out — where each one does one job.
+
+| | |
+|---|---|
+| **StockFlow** | This repo. Sorts photos and prepares the marketplace uploads. |
+| **PostFlow** | Reads a finished StockFlow run and drip-posts the best images to social media, a few a day, with a review step before anything goes public. *Private.* |
+| **stockoverflow** | An archive of the July 2026 experiments that ran StockFlow v4.2 on OpenRouter, OpenAI and Lightning AI. That idea became StockFlow's provider system. *Private.* |
+
+---
+
 ## Development
 
 ```bash
