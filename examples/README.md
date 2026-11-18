@@ -8,7 +8,7 @@ changes is **where each photo's title, keywords and flags come from**.
 |---|---|---|---|---|---|
 | **Gemini, free tier** | Google's API | $0 | limited by the daily quota — can be as low as 20 photos/day per project | yes | [`free-tier/stockflow.json`](free-tier/stockflow.json) |
 | **Gemini, paid tier** | Google's API | ~$0.0003 per photo with `gemini-2.5-flash-lite` (measured, Sept 2026 prices) | hundreds per hour | yes | [`paid-tier/stockflow.json`](paid-tier/stockflow.json) |
-| **Claude Code (sidecar)** | an AI assistant or a person, writing `metadata/<file>.json` | no API bill | as fast as the writer | no | [`claude-code/CLAUDE.md`](claude-code/CLAUDE.md) |
+| **Coding agent (sidecar)** | an AI assistant or a person, writing `metadata/<file>.json` | no API bill | as fast as the writer | no | [`coding-agent/AGENTS.md`](coding-agent/AGENTS.md) |
 | **Local model (Ollama)** | a vision model on your own machine | electricity | hardware-bound | yes | see the README; experimental — read [the benchmark](../docs/benchmarks/2026-09-local-vision-qwen2.5vl-3b.md) first |
 
 ## Using a config file
@@ -25,15 +25,15 @@ does not.
 **Paid tier:** the `rpm`/`rpd` values are deliberately conservative. Look up your
 project's actual limits in AI Studio and raise them.
 
-## Using the Claude Code mode
+## Using the coding-agent mode
 
-1. Copy [`claude-code/CLAUDE.md`](claude-code/CLAUDE.md) into your photo folder.
-2. Open Claude Code in that folder and ask it to work the batch. It reads
-   `CLAUDE.md`, prepares previews with `--prepare-sidecars`, looks at each photo
+1. Copy [`coding-agent/AGENTS.md`](coding-agent/AGENTS.md) into your photo folder.
+2. Open your coding agent in that folder and ask it to work the batch. It reads
+   `AGENTS.md`, prepares previews with `--prepare-sidecars`, looks at each photo
    and its full-resolution corners, writes one JSON file per photo, and runs
    StockFlow with `--provider sidecar`.
 
 The same mode works for anyone writing metadata by hand, or any other tool: one
-JSON file per photo, in the format of [`claude-code/example-metadata.json`](claude-code/example-metadata.json),
+JSON file per photo, in the format of [`coding-agent/example-metadata.json`](coding-agent/example-metadata.json),
 validated exactly like a model's response. Photos without a file yet simply
 stay pending.

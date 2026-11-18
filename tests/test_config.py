@@ -180,6 +180,6 @@ class TestExampleConfigs:
 
         from stockflow.analyzer import parse_analysis
 
-        path = Path(__file__).resolve().parents[1] / "examples" / "claude-code" / "example-metadata.json"
+        path = Path(__file__).resolve().parents[1] / "examples" / "coding-agent" / "example-metadata.json"
         analysis = parse_analysis(json.loads(path.read_text(encoding="utf-8")))
         assert 40 <= len(analysis.keywords) <= 50

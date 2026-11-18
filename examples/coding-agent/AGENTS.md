@@ -1,7 +1,7 @@
-# StockFlow batch — instructions for Claude Code
+# StockFlow batch — instructions for a coding agent
 
 This folder is a **StockFlow batch**: stock photos waiting to be described, sorted
-and exported for Shutterstock and Adobe Stock. You (Claude) are the vision step.
+and exported for Shutterstock and Adobe Stock. You (the agent) are the vision step.
 You look at each photo and write its metadata; StockFlow does everything else —
 duplicates, quality measurement, sorting into folders, embedded IPTC/XMP, and
 both marketplace CSVs.

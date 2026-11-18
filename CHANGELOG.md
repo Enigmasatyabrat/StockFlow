@@ -12,7 +12,7 @@
   what's missing and writes a 1024 px preview plus a full-resolution crop of
   the four corners, where small signatures and date stamps stay legible.
 * **Examples** for four ways to run: Gemini free tier, Gemini paid tier, a
-  `CLAUDE.md` that lets Claude Code work a batch folder, and the local model.
+  `AGENTS.md` that lets a coding agent work a batch folder, and the local model.
 * The end-of-run summary shows files read instead of API calls, and no daily
   quota, when no API is involved.
 
