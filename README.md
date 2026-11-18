@@ -128,7 +128,7 @@ stockflow "D:\Photos\batch_01" --provider sidecar   # process what has metadata
 `--prepare-sidecars` writes a 1024 px preview of each waiting photo plus its four
 corners at full resolution, where small signatures and date stamps stay legible.
 Photos without a file yet stay pending. [`examples/`](examples/) has ready-made
-setups: Gemini free tier, Gemini paid tier, and a `AGENTS.md` that lets a coding
+setups: Gemini free tier, Gemini paid tier, and an `AGENTS.md` that lets a coding
 agent work a whole batch folder.
 
 ### Calibrating the quality thresholds
