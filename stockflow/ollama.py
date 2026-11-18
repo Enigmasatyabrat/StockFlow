@@ -22,6 +22,7 @@ import logging
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Callable
 
 from .analyzer import parse_analysis
@@ -131,7 +132,9 @@ class OllamaAnalyzer:
 
     # -------------------------------------------------------------- analyze --
 
-    def analyze(self, image_bytes: bytes, quality_note: str = "") -> Analysis:
+    def analyze(
+        self, image_bytes: bytes, quality_note: str = "", *, source: Path | None = None
+    ) -> Analysis:
         payload = {
             "model": self._model,
             "stream": False,

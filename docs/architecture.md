@@ -50,6 +50,7 @@ Four tiers, dependencies point downward only.
 | `hashing.py` | SHA-256, pHash, cross-run dedupe index |
 | `analyzer.py` | Analyzer protocol, response parsing, Gemini client, retry, error classification |
 | `ollama.py` | Ollama client for local or self-hosted vision models (stdlib HTTP only) |
+| `sidecar.py` | Metadata from `metadata/<file>.json` instead of a model; previews and full-resolution corner crops for whoever writes it |
 | `metadata.py` | exiftool via UTF-8 argfile |
 | `registry.py` | Per-folder state, migration, crash recovery |
 | `ratelimit.py` | Token bucket, adaptive gate, daily quota |

@@ -39,6 +39,7 @@ from .errors import (
     BackendUnavailable,
     DailyQuotaExhausted,
     ImageDecodeError,
+    MetadataMissing,
     StockFlowError,
     UnsupportedFormatError,
 )
@@ -270,6 +271,11 @@ class Pipeline:
             log.warning("Daily quota exhausted at %s", path.name)
             self._note(f"DAILY QUOTA EXHAUSTED  stopped at {path.name}  {exc}")
             return
+        except MetadataMissing as exc:
+            # Not written yet: leave it pending and carry on with the others.
+            log.info("%s: %s", path.name, exc)
+            self._note(f"SKIPPED  {path.name}  {exc}")
+            return
         except BackendUnavailable as exc:
             self.stop.set()
             log.error("Analysis backend unavailable at %s: %s", path.name, exc)
@@ -357,7 +363,7 @@ class Pipeline:
                 work.path, self.settings.api_max_edge
             )
             analysis = self.analyzer.analyze(
-                api_bytes, quality_mod.describe_for_prompt(quality)
+                api_bytes, quality_mod.describe_for_prompt(quality), source=path
             )
 
             decision = choose_status(
@@ -386,7 +392,7 @@ class Pipeline:
             work = None  # ownership transferred; do not clean up
             return record
 
-        except (DailyQuotaExhausted, BackendUnavailable):
+        except (DailyQuotaExhausted, BackendUnavailable, MetadataMissing):
             raise
         except (UnsupportedFormatError, ImageDecodeError) as exc:
             return self._record_error(path, exc, record=record, permanent=True, prefix=prefix)
@@ -679,6 +685,7 @@ class Pipeline:
             stopped_on_quota=self.stopped_on_quota,
         )
         summary["rate_limit_source"] = self.model_limits.source
+        summary["provider"] = self.settings.provider
         summary["adaptive_pauses"] = self.gate.trips
 
         paths: dict[str, Path] = {}

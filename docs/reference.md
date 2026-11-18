@@ -19,7 +19,7 @@ python stockflow.py FOLDER [options]        # legacy shim, still works
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--provider NAME` | `gemini` | `gemini` (Google API) or `ollama` (local/self-hosted model, no API key) |
+| `--provider NAME` | `gemini` | `gemini` (Google API), `ollama` (local/self-hosted model, no API key), or `sidecar` (reads `metadata/<file>.json`; no AI call) |
 | `--model ID` | `gemini-2.5-flash-lite`; `qwen2.5vl:3b` with ollama | Vision model |
 | `--ollama-host URL` | `http://localhost:11434` | Ollama server |
 | `--workers N` | 3; 1 with ollama | Concurrent workers |
@@ -50,6 +50,18 @@ and always reported; nothing is rejected on them unless you opt in.
 | `--exiftool-path P` | auto | Full path to the exiftool binary |
 | `--config P` | `stockflow.json` in the folder | JSON config file |
 | `-v` / `-q` | — | Verbose / quiet |
+
+### Sidecar
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--prepare-sidecars` | off | List photos without `metadata/<file>.json` in `metadata/_PENDING.txt`, write a 1024 px preview and a full-resolution corner crop for each into `metadata/_previews/`, and exit. Moves nothing. |
+
+A sidecar file holds the same fields as the model response: `title`,
+`description`, `keywords`, `category`, optional `category2`, `commercial_score`,
+`rejection_risk`, `rejection_reason`, `people_visible`,
+`property_or_trademark_visible`, `watermark_or_overlay_visible`. A photo with no
+file is skipped and stays pending; an invalid file is an error naming the file.
 
 ### Calibration
 
@@ -161,6 +173,6 @@ listed as processable, and the startup banner says so.
 | 1 | A StockFlow error |
 | 2 | Bad arguments or folder |
 | 3 | exiftool not usable |
-| 4 | Analysis backend not usable: `GEMINI_API_KEY` missing, or Ollama unreachable / model not pulled |
+| 4 | Analysis backend not usable: `GEMINI_API_KEY` missing, Ollama unreachable / model not pulled, or no `metadata/` folder for `--provider sidecar` |
 | 5 | Registry unreadable |
 | 130 | Interrupted (Ctrl-C) — progress saved |
