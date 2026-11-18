@@ -42,6 +42,15 @@ class DailyQuotaExhausted(AnalyzerError):
     """
 
 
+class BackendUnavailable(AnalyzerError):
+    """The analysis backend itself is gone: server down, model not installed.
+
+    Like `DailyQuotaExhausted`, not the photo's fault. The run stops and the
+    image is left pending, so an outage never counts toward `max_attempts`
+    and can't push good photos into ERROR_PERMANENT.
+    """
+
+
 class RateLimited(AnalyzerError):
     """A short per-minute rate-limit burst. Worth waiting out and retrying."""
 

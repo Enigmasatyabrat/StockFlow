@@ -72,6 +72,18 @@ class TestExitCodes:
         assert code == 4
         assert "GEMINI_API_KEY" in capsys.readouterr().err
 
+    def test_ollama_needs_no_api_key_and_explains_an_unreachable_server(
+        self, photo_folder, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(ExifToolWriter, "available", lambda self: True)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        code = main([str(photo_folder), "--provider", "ollama",
+                     "--ollama-host", "http://127.0.0.1:9"])
+        err = capsys.readouterr().err
+        assert code == 4
+        assert "GEMINI_API_KEY" not in err
+        assert "Cannot reach Ollama" in err and "ollama serve" in err
+
     def test_dry_run_needs_no_api_key(self, photo_folder, monkeypatch, capsys):
         """The whole point of --dry-run is inspecting a folder before
         committing to anything, including before setting up credentials."""

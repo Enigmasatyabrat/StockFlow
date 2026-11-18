@@ -47,6 +47,18 @@ _FREE_TIER: dict[str, ModelLimits] = {
 #: under-drive an unknown model than to hammer it into a 429 storm.
 FALLBACK = ModelLimits(5, 100_000, 100, "unknown model - conservative fallback")
 
+#: A model served locally has no quota to protect: throughput is bounded by
+#: the hardware, which the analyzer waits on anyway. The numbers only need to
+#: be large enough that the token bucket and daily counter never bind.
+LOCAL = ModelLimits(600, 10**9, 1_000_000, "local model - no quota")
+
+
+def for_provider(provider: str, model: str) -> ModelLimits:
+    """Limits for ``model`` as served by ``provider``."""
+    if provider == "ollama":
+        return LOCAL
+    return for_model(model)
+
 
 def for_model(model: str) -> ModelLimits:
     """Best-known limits for ``model``, falling back on family prefix then FALLBACK."""
