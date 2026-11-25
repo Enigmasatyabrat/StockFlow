@@ -1,0 +1,10 @@
+{
+  "_comment": "Gemini free tier. Copy into your photo folder as stockflow.json. Keep GEMINI_API_KEY in the environment, never in this file.",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash-lite",
+  "workers": 1,
+  "batch_limit": 20,
+  "rpm": 10,
+  "min_score": 60,
+  "min_megapixels": 4.0
+}

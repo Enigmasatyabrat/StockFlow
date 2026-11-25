@@ -204,15 +204,20 @@ def format_summary(summary: dict) -> str:
             f"  (not an acceptance guarantee - the marketplace's reviewers decide)"
         )
     lines.append(f"   Duration               : {summary.get('duration_seconds', 0)}s")
-    lines.append(
-        f"   API calls / retries    : {summary.get('api_calls', 0)} / {summary.get('api_retries', 0)}"
-    )
+    provider = summary.get("provider", "gemini")
+    if provider == "sidecar":
+        lines.append(f"   Metadata files read    : {summary.get('api_calls', 0)}")
+    else:
+        lines.append(
+            f"   API calls / retries    : {summary.get('api_calls', 0)} / {summary.get('api_retries', 0)}"
+        )
     if summary.get("prompt_tokens"):
         lines.append(
             f"   Tokens in / out        : {summary['prompt_tokens']:,} / "
             f"{summary.get('output_tokens', 0):,}"
         )
-    if summary.get("daily_quota_used") is not None:
+    # Only Gemini has a daily quota; local and sidecar runs carry a placeholder.
+    if provider == "gemini" and summary.get("daily_quota_used") is not None:
         lines.append(
             f"   Daily quota used       : {summary['daily_quota_used']}/"
             f"{summary.get('daily_quota_limit', '?')} requests"

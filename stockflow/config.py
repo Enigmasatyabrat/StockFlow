@@ -28,8 +28,9 @@ DEFAULT_MODEL = "gemini-2.5-flash-lite"
 
 #: Where image analysis runs. "gemini" calls Google's API; "ollama" calls a
 #: vision model served by Ollama -- on this machine or another one reachable
-#: over the network -- and costs nothing per image.
-PROVIDERS = ("gemini", "ollama")
+#: over the network -- and costs nothing per image. "sidecar" makes no call
+#: at all: it reads metadata/<file>.json written by a person or another tool.
+PROVIDERS = ("gemini", "ollama", "sidecar")
 DEFAULT_OLLAMA_MODEL = "qwen2.5vl:3b"
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 
